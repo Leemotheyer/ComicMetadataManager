@@ -253,6 +253,191 @@ class ComicInfoXMLGenerator:
         except Exception as e:
             print(f"Error processing metadata: {e}")
 
+    def generate_issue_xml(self, metadata: dict, target_issue: dict, volume_details: dict) -> str:
+        """Generate XML content for a specific issue
+        
+        Args:
+            metadata: ComicVine metadata for the issue
+            target_issue: Issue details from Kapowarr
+            volume_details: Volume details from Kapowarr
+            
+        Returns:
+            XML content as a string
+        """
+        # Create root element
+        root = ET.Element('ComicInfo')
+        root.set('xmlns', self.xmlns)
+        
+        # Basic issue information
+        if metadata.get('name'):
+            title_elem = ET.SubElement(root, 'Title')
+            title_elem.text = self.clean_text(metadata['name'])
+        
+        if target_issue.get('issue_number'):
+            number_elem = ET.SubElement(root, 'Number')
+            number_elem.text = str(target_issue['issue_number'])
+        
+        # Volume information
+        if metadata.get('volume', {}).get('name'):
+            series_elem = ET.SubElement(root, 'Series')
+            series_elem.text = metadata['volume']['name']
+            
+            volume_elem = ET.SubElement(root, 'Volume')
+            volume_elem.text = metadata['volume']['name']
+            
+            alternate_series_elem = ET.SubElement(root, 'AlternateSeries')
+            alternate_series_elem.text = metadata['volume']['name']
+        
+        # Issue count
+        if volume_details.get('issue_count'):
+            count_elem = ET.SubElement(root, 'Count')
+            count_elem.text = str(volume_details['issue_count'])
+            
+            alternate_count_elem = ET.SubElement(root, 'AlternateCount')
+            alternate_count_elem.text = str(volume_details['issue_count'])
+        
+        # Alternate number
+        if target_issue.get('issue_number'):
+            alternate_number_elem = ET.SubElement(root, 'AlternateNumber')
+            alternate_number_elem.text = str(target_issue['issue_number'])
+        
+        # Description
+        if metadata.get('description'):
+            summary_elem = ET.SubElement(root, 'Summary')
+            summary_elem.text = self.clean_text(metadata['description'])
+        
+        # Notes
+        notes_elem = ET.SubElement(root, 'Notes')
+        notes_elem.text = 'Processed by Comic Metadata Manager'
+        
+        # Date information - prefer store_date over cover_date for more accurate dates
+        date_to_use = None
+        if metadata.get('store_date'):
+            date_to_use = metadata['store_date']
+        elif metadata.get('cover_date'):
+            date_to_use = metadata['cover_date']
+        
+        if date_to_use:
+            try:
+                date_obj = datetime.strptime(date_to_use, '%Y-%m-%d')
+                
+                year_elem = ET.SubElement(root, 'Year')
+                year_elem.text = str(date_obj.year)
+                
+                month_elem = ET.SubElement(root, 'Month')
+                month_elem.text = str(date_obj.month)
+                
+                day_elem = ET.SubElement(root, 'Day')
+                day_elem.text = str(date_obj.day)
+                
+                # Also keep CoverDate for backward compatibility
+                cover_date_elem = ET.SubElement(root, 'CoverDate')
+                cover_date_elem.text = date_to_use
+            except:
+                # Fallback to just CoverDate if parsing fails
+                cover_date_elem = ET.SubElement(root, 'CoverDate')
+                cover_date_elem.text = date_to_use
+        
+        # Creator credits
+        if metadata.get('person_credits'):
+            # Writers
+            writers = [c for c in metadata['person_credits'] if c.get('role') == 'writer']
+            if writers:
+                writer_elem = ET.SubElement(root, 'Writer')
+                writer_elem.text = ', '.join([c['name'] for c in writers])
+            
+            # Pencillers
+            pencillers = [c for c in metadata['person_credits'] if c.get('role') == 'penciler']
+            if pencillers:
+                penciller_elem = ET.SubElement(root, 'Penciller')
+                penciller_elem.text = ', '.join([c['name'] for c in pencillers])
+            
+            # Inkers
+            inkers = [c for c in metadata['person_credits'] if c.get('role') == 'inker']
+            if inkers:
+                inker_elem = ET.SubElement(root, 'Inker')
+                inker_elem.text = ', '.join([c['name'] for c in inkers])
+            
+            # Colorists
+            colorists = [c for c in metadata['person_credits'] if c.get('role') == 'colorist']
+            if colorists:
+                colorist_elem = ET.SubElement(root, 'Colorist')
+                colorist_elem.text = ', '.join([c['name'] for c in colorists])
+            
+            # Letterers
+            letterers = [c for c in metadata['person_credits'] if c.get('role') == 'letterer']
+            if letterers:
+                letterer_elem = ET.SubElement(root, 'Letterer')
+                letterer_elem.text = ', '.join([c['name'] for c in letterers])
+            
+            # Cover artists
+            cover_artists = [c for c in metadata['person_credits'] if c.get('role') == 'cover']
+            if cover_artists:
+                cover_artist_elem = ET.SubElement(root, 'CoverArtist')
+                cover_artist_elem.text = ', '.join([c['name'] for c in cover_artists])
+            
+            # Editors
+            editors = [c for c in metadata['person_credits'] if c.get('role') == 'editor']
+            if editors:
+                editor_elem = ET.SubElement(root, 'Editor')
+                editor_elem.text = ', '.join([c['name'] for c in editors])
+        
+        # Publisher
+        if metadata.get('publisher', {}).get('name'):
+            publisher_elem = ET.SubElement(root, 'Publisher')
+            publisher_elem.text = metadata['publisher']['name']
+        
+        # Imprint
+        if metadata.get('imprint', {}).get('name'):
+            imprint_elem = ET.SubElement(root, 'Imprint')
+            imprint_elem.text = metadata['imprint']['name']
+        
+        # Genre
+        if metadata.get('genres'):
+            genres = [genre['name'] for genre in metadata['genres']]
+            if genres:
+                genre_elem = ET.SubElement(root, 'Genre')
+                genre_elem.text = ', '.join(genres)
+        
+        # Web/URL references
+        if metadata.get('site_detail_url'):
+            web_elem = ET.SubElement(root, 'Web')
+            web_elem.text = metadata['site_detail_url']
+        
+        # Page count
+        if metadata.get('page_count'):
+            page_count_elem = ET.SubElement(root, 'PageCount')
+            page_count_elem.text = str(metadata['page_count'])
+        
+        # Language
+        language_elem = ET.SubElement(root, 'LanguageISO')
+        language_elem.text = 'en'
+        
+        # Format
+        format_elem = ET.SubElement(root, 'Format')
+        format_elem.text = 'Comic'
+        
+        # Age rating
+        age_rating_elem = ET.SubElement(root, 'AgeRating')
+        age_rating_elem.text = 'Unknown'
+        
+        # Manga
+        manga_elem = ET.SubElement(root, 'Manga')
+        manga_elem.text = 'No'
+        
+        # Black and white
+        black_white_elem = ET.SubElement(root, 'BlackAndWhite')
+        black_white_elem.text = 'No'
+        
+        # Scan information
+        scan_info_elem = ET.SubElement(root, 'ScanInformation')
+        scan_info_elem.text = 'Comic Metadata Manager'
+        
+        # Format the XML with proper indentation
+        rough_string = ET.tostring(root, 'unicode')
+        reparsed = minidom.parseString(rough_string)
+        return reparsed.toprettyxml(indent="  ")
+
 def main():
     """Main function to run the XML generator"""
     try:

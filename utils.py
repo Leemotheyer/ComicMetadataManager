@@ -103,6 +103,46 @@ def cleanup_temp_files():
         return False
 
 
+def cleanup_temp_directories():
+    """Clean up any orphaned temporary directories"""
+    try:
+        cleaned_dirs = []
+        failed_dirs = []
+        
+        # Look for various types of temp directories
+        temp_patterns = [
+            "temp_xml_*",
+            "temp_injection_*",
+            "temp_*"
+        ]
+        
+        for pattern in temp_patterns:
+            temp_dirs = [d for d in os.listdir('.') if d.startswith(pattern.replace('*', ''))]
+            for temp_dir_path in temp_dirs:
+                if os.path.exists(temp_dir_path) and os.path.isdir(temp_dir_path):
+                    try:
+                        shutil.rmtree(temp_dir_path)
+                        cleaned_dirs.append(temp_dir_path)
+                    except Exception as cleanup_error:
+                        failed_dirs.append(f"{temp_dir_path}: {cleanup_error}")
+        
+        if cleaned_dirs:
+            message = f"Cleaned up {len(cleaned_dirs)} temporary directories"
+        else:
+            message = "No temporary directories found to clean up"
+            
+        return {
+            'success': True,
+            'message': message,
+            'cleaned_dirs': cleaned_dirs,
+            'failed_dirs': failed_dirs,
+            'total_cleaned': len(cleaned_dirs)
+        }
+        
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
 def generate_xml_files(metadata, output_dir="temp_xml"):
     """Generate XML files for comic metadata"""
     try:

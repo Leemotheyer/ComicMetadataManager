@@ -7,6 +7,7 @@ import os
 import patoolib
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -418,6 +419,196 @@ class ComicMetadataInjector:
                     print(f"⚠️ Failed to clean up {temp_dir}: {e}")
         else:
             print(f"✅ No old temp directories found")
+
+    def process_issue_metadata(self, volume_id: int, issue_index: int, volume_details: dict, 
+                             metadata_fetcher, volume_db) -> dict:
+        """
+        Process metadata for a specific issue and inject it into comic files
+        
+        Args:
+            volume_id: ID of the volume
+            issue_index: Index of the issue in the volume
+            volume_details: Volume details from Kapowarr
+            metadata_fetcher: ComicMetadataFetcher instance
+            volume_db: Volume database instance
+            
+        Returns:
+            Dictionary with processing results
+        """
+        try:
+            print(f"🔄 Starting metadata processing for issue {issue_index} in volume {volume_id}")
+            
+            # Check if issue index is valid
+            if 'issues' not in volume_details or issue_index < 0 or issue_index >= len(volume_details['issues']):
+                return {
+                    'success': False,
+                    'error': f'Issue index {issue_index} is out of range. Volume has {len(volume_details.get("issues", []))} issues.'
+                }
+            
+            # Get the specific issue by index
+            target_issue = volume_details['issues'][issue_index]
+            
+            # Check if issue has files
+            if not target_issue.get('files') or len(target_issue['files']) == 0:
+                return {
+                    'success': False,
+                    'error': f'Issue {issue_index} has no files to process'
+                }
+            
+            # Check if issue has ComicVine ID
+            comicvine_id = target_issue.get('comicvine_id')
+            if not comicvine_id:
+                return {
+                    'success': False,
+                    'error': f'Issue {issue_index} has no ComicVine ID'
+                }
+            
+            # Fetch metadata from ComicVine
+            metadata = metadata_fetcher.get_comicvine_metadata(comicvine_id)
+            if not metadata:
+                return {
+                    'success': False,
+                    'error': f'Failed to fetch metadata from ComicVine for issue {comicvine_id}'
+                }
+            
+            # Get the folder path from volume details
+            kapowarr_folder_path = volume_details.get('folder')
+            if not kapowarr_folder_path:
+                return {
+                    'success': False,
+                    'error': 'No folder path found for this volume'
+                }
+            
+            # Create a temporary directory for the XML
+            temp_dir = f"temp_xml_issue_{volume_id}_{issue_index}_{int(time.time())}"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            try:
+                # Generate XML content for this issue using CreateXML module
+                from CreateXML import ComicInfoXMLGenerator
+                xml_generator = ComicInfoXMLGenerator()
+                xml_content = xml_generator.generate_issue_xml(metadata, target_issue, volume_details)
+                
+                # Write XML to temporary file
+                xml_file_path = os.path.join(temp_dir, f"issue_{issue_index}.xml")
+                with open(xml_file_path, 'w', encoding='utf-8') as f:
+                    f.write(xml_content)
+                
+                # Get the specific files for this issue only
+                issue_files = target_issue.get('files', [])
+                
+                # Map Kapowarr path to local path
+                local_folder_path = self._map_kapowarr_to_local_path(kapowarr_folder_path)
+                
+                if not local_folder_path or not os.path.exists(local_folder_path):
+                    return {
+                        'success': False,
+                        'error': f'Local folder not found: {local_folder_path}'
+                    }
+                
+                # Process only the files for this specific issue
+                results = []
+                for issue_file in issue_files:
+                    file_path = issue_file.get('filepath', '')
+                    if not file_path:
+                        continue
+                        
+                    # Extract just the filename from the full path
+                    filename = os.path.basename(file_path)
+                    
+                    # Look for this specific file in the local folder
+                    local_file_path = os.path.join(local_folder_path, filename)
+                    
+                    if os.path.exists(local_file_path):
+                        try:
+                            # Create a temporary XML file specifically for this file
+                            file_xml_path = os.path.join(temp_dir, f"file_{filename}.xml")
+                            with open(file_xml_path, 'w', encoding='utf-8') as f:
+                                f.write(xml_content)
+                            
+                            # Process just this one file
+                            file_result = self._process_comic_file(
+                                local_file_path, 
+                                [file_xml_path], 
+                                volume_id, 
+                                []
+                            )
+                            
+                            results.append({
+                                'file': filename,
+                                'success': file_result.get('success', False),
+                                'message': file_result.get('message', 'Unknown result'),
+                                'error': file_result.get('error', '')
+                            })
+                            
+                        except Exception as e:
+                            results.append({
+                                'file': filename,
+                                'success': False,
+                                'error': str(e)
+                            })
+                    else:
+                        results.append({
+                            'file': filename,
+                            'success': False,
+                            'error': 'File not found in local folder'
+                        })
+                
+                # Update issue metadata status to indicate processing and injection are complete
+                volume_db.update_issue_metadata_status(
+                    volume_id,
+                    comicvine_id,
+                    target_issue.get('issue_number', 'Unknown'),
+                    metadata_processed=True,
+                    metadata_injected=True
+                )
+                
+                print(f"✅ Successfully processed and injected metadata for issue {issue_index}")
+                
+                # Check if all issues in the volume now have metadata processed
+                all_issues_processed = True
+                for issue in volume_details['issues']:
+                    issue_comicvine_id = issue.get('comicvine_id')
+                    if issue_comicvine_id:
+                        issue_status = volume_db.get_issue_metadata_status(volume_id, issue_comicvine_id)
+                        if not issue_status or not issue_status.get('metadata_processed', False):
+                            all_issues_processed = False
+                            break
+                
+                # Update volume status if all issues are processed
+                if all_issues_processed:
+                    volume_db.update_volume_status(volume_id, metadata_processed=True, metadata_injected=True)
+                    print(f"✅ All issues in volume {volume_id} now have metadata processed and injected")
+                
+                return {
+                    'success': True,
+                    'result': {
+                        'comicvine_id': comicvine_id,
+                        'issue_index': issue_index,
+                        'kapowarr_issue': target_issue,
+                        'comicvine_metadata': metadata,
+                        'injection_results': results,
+                        'local_folder': local_folder_path,
+                        'kapowarr_folder': kapowarr_folder_path
+                    },
+                    'message': f'Successfully processed and injected metadata for issue {issue_index} ({len(results)} files)'
+                }
+                
+            finally:
+                # Clean up temporary directory
+                try:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+                except Exception as cleanup_error:
+                    print(f"Error during cleanup: {cleanup_error}")
+                
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+
 
 
 # Standalone usage (for testing)

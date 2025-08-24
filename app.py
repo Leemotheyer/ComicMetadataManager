@@ -19,6 +19,7 @@ from utils import (
     test_kapowarr_connection_with_settings,
     test_comicvine_connection_with_settings,
     cleanup_temp_files,
+    cleanup_temp_directories,
     generate_xml_files,
     map_kapowarr_to_local_path
 )
@@ -431,277 +432,28 @@ def process_issue_metadata(volume_id, issue_index):
                     }
                     return
                 
-                # Check if issue index is valid
-                if issue_index < 0 or issue_index >= len(volume_details['issues']):
-                    task_results[task_id] = {
-                        'status': 'error',
-                        'error': f'Issue index {issue_index} is out of range. Volume has {len(volume_details["issues"])} issues.'
-                    }
-                    return
+                # Use the new method from MetaDataAdd
+                from MetaDataAdd import ComicMetadataInjector
+                injector = ComicMetadataInjector()
                 
-                # Get the specific issue by index
-                target_issue = volume_details['issues'][issue_index]
+                result = injector.process_issue_metadata(
+                    volume_id, 
+                    issue_index, 
+                    volume_details, 
+                    volume_manager.metadata_fetcher, 
+                    volume_db
+                )
                 
-                # Check if issue has files
-                if not target_issue.get('files') or len(target_issue['files']) == 0:
-                    task_results[task_id] = {
-                        'status': 'error',
-                        'error': f'Issue {issue_index} has no files to process'
-                    }
-                    return
-                
-                # Check if issue has ComicVine ID
-                comicvine_id = target_issue.get('comicvine_id')
-                if not comicvine_id:
-                    task_results[task_id] = {
-                        'status': 'error',
-                        'error': f'Issue {issue_index} has no ComicVine ID'
-                    }
-                    return
-                
-                # For manual button presses, always allow processing regardless of current status
-                # This ensures users can manually reprocess any issue when needed
-                issue_status = volume_db.get_issue_metadata_status(volume_id, comicvine_id)
-                if issue_status and issue_status.get('metadata_processed', False):
-                    print(f"🔄 Manual processing requested for issue {issue_index} (already has metadata), reprocessing...")
-                
-                # Fetch metadata from ComicVine
-                metadata = volume_manager.metadata_fetcher.get_comicvine_metadata(comicvine_id)
-                if not metadata:
-                    task_results[task_id] = {
-                        'status': 'error',
-                        'error': f'Failed to fetch metadata from ComicVine for issue {comicvine_id}'
-                    }
-                    return
-                
-                # Now inject the metadata into the comic files (like the main workflow does)
-                try:
-                    # Get the folder path from volume details
-                    kapowarr_folder_path = volume_details.get('folder')
-                    if not kapowarr_folder_path:
-                        task_results[task_id] = {
-                            'status': 'error',
-                            'error': 'No folder path found for this volume'
-                        }
-                        return
-                    
-                    # Import and use the metadata injector
-                    from MetaDataAdd import ComicMetadataInjector
-                    
-                    # Create a temporary XML file for this specific issue
-                    import tempfile
-                    import os
-                    
-                    # Create a temporary directory for the XML
-                    temp_dir = f"temp_xml_issue_{volume_id}_{issue_index}_{int(time.time())}"
-                    os.makedirs(temp_dir, exist_ok=True)
-                    
-                    # Generate XML content for this issue
-                    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-    <Title>{metadata.get('name', 'Unknown')}</Title>
-    <Series>{metadata.get('volume', {}).get('name', 'Unknown') if metadata.get('volume') else 'Unknown'}</Series>
-    <Number>{target_issue.get('issue_number', 'Unknown')}</Number>
-    <Count>{volume_details.get('issue_count', 0)}</Count>
-    <Volume>{metadata.get('volume', {}).get('name', 'Unknown') if metadata.get('volume') else 'Unknown'}</Volume>
-    <AlternateSeries>{metadata.get('volume', {}).get('name', 'Unknown') if metadata.get('volume') else 'Unknown'}</AlternateSeries>
-    <AlternateNumber>{target_issue.get('issue_number', 'Unknown')}</AlternateNumber>
-    <AlternateCount>{volume_details.get('issue_count', 0)}</AlternateCount>
-    <Summary>{metadata.get('description', 'No description available')}</Summary>
-    <Notes>Processed by Comic Metadata Manager</Notes>
-    <Year>{metadata.get('cover_date', '')[:4] if metadata.get('cover_date') else ''}</Year>
-    <Month>{metadata.get('cover_date', '')[5:7] if metadata.get('cover_date') and len(metadata.get('cover_date', '')) > 7 else ''}</Month>
-    <Day>{metadata.get('cover_date', '')[8:10] if metadata.get('cover_date') and len(metadata.get('cover_date', '')) > 10 else ''}</Day>
-    <Writer>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'writer'])}</Writer>
-    <Penciller>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'penciler'])}</Penciller>
-    <Inker>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'inker'])}</Inker>
-    <Colorist>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'colorist'])}</Colorist>
-    <Letterer>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'letterer'])}</Letterer>
-    <CoverArtist>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'cover'])}</CoverArtist>
-    <Editor>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'editor'])}</Editor>
-    <Publisher>{metadata.get('publisher', {}).get('name', 'Unknown') if metadata.get('publisher') else 'Unknown'}</Publisher>
-    <Imprint>{metadata.get('imprint', {}).get('name', 'Unknown') if metadata.get('imprint') else 'Unknown'}</Imprint>
-    <Genre>{', '.join([genre['name'] for genre in metadata.get('genres', [])])}</Genre>
-    <Web>{metadata.get('site_detail_url', '')}</Web>
-    <PageCount>{metadata.get('page_count', 0)}</PageCount>
-    <LanguageISO>en</LanguageISO>
-    <Format>Comic</Format>
-    <AgeRating>Unknown</AgeRating>
-    <Manga>No</Manga>
-    <BlackAndWhite>No</BlackAndWhite>
-    <ScanInformation>Comic Metadata Manager</ScanInformation>
-</ComicInfo>"""
-                    
-                    # Write XML to temporary file
-                    xml_file_path = os.path.join(temp_dir, f"issue_{issue_index}.xml")
-                    with open(xml_file_path, 'w', encoding='utf-8') as f:
-                        f.write(xml_content)
-                    
-                    # Get the specific files for this issue only
-                    issue_files = target_issue.get('files', [])
-                    if not issue_files:
-                        task_results[task_id] = {
-                            'status': 'error',
-                            'error': f'No files found for issue {issue_index}'
-                        }
-                        return
-                    
-                    # Map Kapowarr path to local path
-                    local_folder_path = None
-                    if hasattr(volume_manager, 'metadata_fetcher') and hasattr(volume_manager.metadata_fetcher, '_map_kapowarr_to_local_path'):
-                        local_folder_path = volume_manager.metadata_fetcher._map_kapowarr_to_local_path(
-                            kapowarr_folder_path, 
-                            '/comics-1', 
-                            'comics'
-                        )
-                    else:
-                        # Fallback: try to convert path manually
-                        if kapowarr_folder_path.startswith('/comics-1/'):
-                            local_folder_path = kapowarr_folder_path.replace('/comics-1/', 'comics/')
-                        else:
-                            local_folder_path = kapowarr_folder_path
-                    
-                    if not local_folder_path or not os.path.exists(local_folder_path):
-                        task_results[task_id] = {
-                            'status': 'error',
-                            'error': f'Local folder not found: {local_folder_path}'
-                        }
-                        return
-                    
-                    # Process only the files for this specific issue
-                    results = []
-                    for issue_file in issue_files:
-                        file_path = issue_file.get('filepath', '')
-                        if not file_path:
-                            continue
-                            
-                        # Extract just the filename from the full path
-                        filename = os.path.basename(file_path)
-                        
-                        # Look for this specific file in the local folder
-                        local_file_path = os.path.join(local_folder_path, filename)
-                        
-                        if os.path.exists(local_file_path):
-                            try:
-                                # Use the ComicMetadataInjector to process just this one file
-                                injector = ComicMetadataInjector()
-                                
-                                # Create a temporary XML file specifically for this file
-                                file_xml_path = os.path.join(temp_dir, f"file_{filename}.xml")
-                                with open(file_xml_path, 'w', encoding='utf-8') as f:
-                                    f.write(xml_content)
-                                
-                                # Process just this one file
-                                file_result = injector._process_comic_file(
-                                    local_file_path, 
-                                    [file_xml_path], 
-                                    volume_id, 
-                                    []
-                                )
-                                
-                                results.append({
-                                    'file': filename,
-                                    'success': file_result.get('success', False),
-                                    'message': file_result.get('message', 'Unknown result'),
-                                    'error': file_result.get('error', '')
-                                })
-                                
-                            except Exception as e:
-                                results.append({
-                                    'file': filename,
-                                    'success': False,
-                                    'error': str(e)
-                                })
-                        else:
-                            results.append({
-                                'file': filename,
-                                'success': False,
-                                'error': 'File not found in local folder'
-                            })
-                    
-                    # Store the result
+                if result['success']:
                     task_results[task_id] = {
                         'status': 'completed',
-                        'result': {
-                            'comicvine_id': comicvine_id,
-                            'issue_index': issue_index,
-                            'kapowarr_issue': target_issue,
-                            'comicvine_metadata': metadata,
-                            'injection_results': results,
-                            'local_folder': local_folder_path,
-                            'kapowarr_folder': kapowarr_folder_path
-                        },
-                        'message': f'Successfully processed and injected metadata for issue {issue_index} ({len(results)} files)'
+                        'result': result['result'],
+                        'message': result['message']
                     }
-                    
-                    # Update issue metadata status to indicate processing and injection are complete
-                    volume_db.update_issue_metadata_status(
-                        volume_id,
-                        comicvine_id,
-                        target_issue.get('issue_number', 'Unknown'),
-                        metadata_processed=True,
-                        metadata_injected=True
-                    )
-                    
-                    print(f"✅ Successfully processed and injected metadata for issue {issue_index}")
-                    
-                    # Check if all issues in the volume now have metadata processed
-                    volume_details = volume_manager.get_volume_details(volume_id)
-                    if volume_details and 'issues' in volume_details:
-                        all_issues_processed = True
-                        for issue in volume_details['issues']:
-                            issue_comicvine_id = issue.get('comicvine_id')
-                            if issue_comicvine_id:
-                                issue_status = volume_db.get_issue_metadata_status(volume_id, issue_comicvine_id)
-                                if not issue_status or not issue_status.get('metadata_processed', False):
-                                    all_issues_processed = False
-                                    break
-                        
-                        # Update volume status if all issues are processed
-                        if all_issues_processed:
-                            volume_db.update_volume_status(volume_id, metadata_processed=True, metadata_injected=True)
-                            print(f"✅ All issues in volume {volume_id} now have metadata processed and injected")
-                    
-                    # Clean up temporary directory and any other temp dirs created during processing
-                    try:
-                        import shutil
-                        import glob
-                        
-                        # Remove our main temp directory
-                        if os.path.exists(temp_dir):
-                            shutil.rmtree(temp_dir)
-                        
-                        # Also clean up any other temp directories that might have been created
-                        # Look for temp directories related to this volume and issue
-                        temp_patterns = [
-                            f"temp_xml_issue_{volume_id}_{issue_index}_*",
-                            f"temp_xml_{volume_id}_*",  # General volume temp dirs
-                            f"temp_injection_*"  # Any injection temp dirs
-                        ]
-                        
-                        for pattern in temp_patterns:
-                            temp_dirs = glob.glob(pattern)
-                            for temp_dir_path in temp_dirs:
-                                if os.path.exists(temp_dir_path) and os.path.isdir(temp_dir_path):
-                                    try:
-                                        shutil.rmtree(temp_dir_path)
-                                        print(f"Cleaned up temp directory: {temp_dir_path}")
-                                    except Exception as cleanup_error:
-                                        print(f"Failed to clean up {temp_dir_path}: {cleanup_error}")
-                        
-                    except Exception as cleanup_error:
-                        print(f"Error during cleanup: {cleanup_error}")
-                        # Try to clean up at least the main temp directory
-                        try:
-                            if os.path.exists(temp_dir):
-                                shutil.rmtree(temp_dir)
-                        except:
-                            pass
-                    
-                except Exception as injection_error:
+                else:
                     task_results[task_id] = {
                         'status': 'error',
-                        'error': f'Failed to inject metadata into comic files: {str(injection_error)}'
+                        'error': result['error']
                     }
                 
             except Exception as e:
@@ -889,86 +641,7 @@ def test_settings():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-def test_kapowarr_connection_with_settings(settings):
-    """Test Kapowarr connection using specific settings"""
-    import requests
-    
-    try:
-        url = f"{settings['kapowarr_url']}/api/volumes/stats"
-        params = {'api_key': settings['kapowarr_api_key']}
-        
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        # Check for volumes in the result field (Kapowarr API structure)
-        if 'result' in data and 'volumes' in data['result']:
-            return {
-                'success': True,
-                'message': f"Connected successfully! Found {data['result']['volumes']} volumes.",
-                'data': data
-            }
-        # Also check for volumes at top level (fallback)
-        elif 'volumes' in data:
-            return {
-                'success': True,
-                'message': f"Connected successfully! Found {data['volumes']} volumes.",
-                'data': data
-            }
-        else:
-            return {
-                'success': False,
-                'message': 'Invalid response format from Kapowarr API'
-            }
-    except requests.exceptions.RequestException as e:
-        return {
-            'success': False,
-            'message': f"Connection failed: {str(e)}"
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'message': f"Unexpected error: {str(e)}"
-        }
 
-def test_comicvine_connection_with_settings(settings):
-    """Test ComicVine connection using specific settings"""
-    import requests
-    
-    try:
-        url = "https://comicvine.gamespot.com/api/search/"
-        params = {
-            'api_key': settings['comicvine_api_key'],
-            'format': 'json',
-            'query': 'batman',
-            'limit': 1
-        }
-        
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        if data.get('status_code') == 1:
-            return {
-                'success': True,
-                'message': 'ComicVine API connection successful!',
-                'data': data
-            }
-        else:
-            return {
-                'success': False,
-                'message': f"ComicVine API error: {data.get('error', 'Unknown error')}"
-            }
-    except requests.exceptions.RequestException as e:
-        return {
-            'success': False,
-            'message': f"Connection failed: {str(e)}"
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'message': f"Unexpected error: {str(e)}"
-        }
 
 @app.route('/cleanup', methods=['POST'])
 def cleanup_temp_files():
@@ -1092,43 +765,8 @@ def migrate_database_schema():
 def cleanup_temp_directories():
     """Clean up any orphaned temporary directories"""
     try:
-        import shutil
-        import glob
-        import os
-        
-        cleaned_dirs = []
-        failed_dirs = []
-        
-        # Look for various types of temp directories
-        temp_patterns = [
-            "temp_xml_*",
-            "temp_injection_*",
-            "temp_*"
-        ]
-        
-        for pattern in temp_patterns:
-            temp_dirs = glob.glob(pattern)
-            for temp_dir_path in temp_dirs:
-                if os.path.exists(temp_dir_path) and os.path.isdir(temp_dir_path):
-                    try:
-                        shutil.rmtree(temp_dir_path)
-                        cleaned_dirs.append(temp_dir_path)
-                    except Exception as cleanup_error:
-                        failed_dirs.append(f"{temp_dir_path}: {cleanup_error}")
-        
-        if cleaned_dirs:
-            message = f"Cleaned up {len(cleaned_dirs)} temporary directories"
-        else:
-            message = "No temporary directories found to clean up"
-            
-        return jsonify({
-            'success': True,
-            'message': message,
-            'cleaned_dirs': cleaned_dirs,
-            'failed_dirs': failed_dirs,
-            'total_cleaned': len(cleaned_dirs)
-        })
-        
+        result = cleanup_temp_directories()
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -1326,62 +964,9 @@ def get_volume_issue_status(volume_id):
         if not volume_details or 'issues' not in volume_details:
             return jsonify({'success': False, 'error': 'Volume or issues not found'})
         
-        # Get status for all issues
-        issues_status = []
-        for issue in volume_details['issues']:
-            comicvine_id = issue.get('comicvine_id')
-            if comicvine_id:
-                issue_status = volume_db.get_issue_metadata_status(volume_id, comicvine_id)
-                if issue_status:
-                    issues_status.append({
-                        'issue_index': volume_details['issues'].index(issue),
-                        'issue_number': issue.get('issue_number', 'Unknown'),
-                        'comicvine_id': comicvine_id,
-                        'has_files': bool(issue.get('files') and len(issue['files']) > 0),
-                        'metadata_processed': issue_status.get('metadata_processed', False),
-                        'metadata_injected': issue_status.get('metadata_injected', False),
-                        'last_processed': issue_status.get('last_processed'),
-                        'last_injected': issue_status.get('last_injected'),
-                        'created_at': issue_status.get('created_at')
-                    })
-                else:
-                    # Issue not in database yet
-                    issues_status.append({
-                        'issue_index': volume_details['issues'].index(issue),
-                        'issue_number': issue.get('issue_number', 'Unknown'),
-                        'comicvine_id': comicvine_id,
-                        'has_files': bool(issue.get('files') and len(issue['files']) > 0),
-                        'metadata_processed': False,
-                        'metadata_injected': False,
-                        'last_processed': None,
-                        'last_injected': None,
-                        'created_at': None
-                    })
-        
-        # Get volume status
-        volume_info = volume_db.get_volumes(limit=None)
-        volume_status = None
-        for vol in volume_info:
-            if vol['id'] == volume_id:
-                volume_status = vol
-                break
-        
-        return jsonify({
-            'success': True,
-            'volume_id': volume_id,
-            'volume_status': volume_status,
-            'total_issues': len(volume_details['issues']),
-            'issues_with_files': sum(1 for issue in volume_details['issues'] if issue.get('files')),
-            'issues_status': issues_status,
-            'summary': {
-                'total_issues': len(issues_status),
-                'issues_with_files': sum(1 for issue in issues_status if issue['has_files']),
-                'metadata_processed': sum(1 for issue in issues_status if issue['metadata_processed']),
-                'metadata_injected': sum(1 for issue in issues_status if issue['metadata_injected']),
-                'needs_processing': sum(1 for issue in issues_status if issue['has_files'] and not issue['metadata_processed']),
-                'needs_injection': sum(1 for issue in issues_status if issue['metadata_processed'] and not issue['metadata_injected'])
-            }
-        })
+        # Use the new method from volume_database
+        result = volume_db.get_volume_issue_status(volume_id, volume_details)
+        return jsonify(result)
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})

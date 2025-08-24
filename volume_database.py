@@ -583,154 +583,135 @@ class VolumeDatabase:
             return False
 
     def update_paths_to_relative(self) -> bool:
-        """Update existing volume folders to use relative paths instead of absolute paths"""
+        """Update database paths to use relative paths instead of absolute paths"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Get all volumes with absolute paths
-                cursor.execute("SELECT id, volume_folder FROM volumes WHERE volume_folder LIKE '/comics/%'")
-                volumes_to_update = cursor.fetchall()
-                
-                if not volumes_to_update:
-                    print("✅ No volumes with absolute paths found, nothing to update")
-                    return True
-                
-                print(f"🔄 Found {len(volumes_to_update)} volumes with absolute paths, updating to relative...")
+                # Get all volume details
+                cursor.execute("SELECT volume_id, details_json FROM volume_details")
+                volume_details = cursor.fetchall()
                 
                 updated_count = 0
-                for volume_id, old_folder in volumes_to_update:
-                    # Convert /comics/... to comics/...
-                    new_folder = old_folder.replace('/comics/', 'comics/')
-                    
-                    cursor.execute('''
-                        UPDATE volumes 
-                        SET volume_folder = ?, last_updated = ?
-                        WHERE id = ?
-                    ''', (new_folder, datetime.now(), volume_id))
-                    
-                    updated_count += 1
-                    print(f"  Updated volume {volume_id}: {old_folder} → {new_folder}")
+                for volume_id, details_json in volume_details:
+                    try:
+                        details = json.loads(details_json)
+                        if 'folder' in details:
+                            old_path = details['folder']
+                            # Convert absolute paths to relative
+                            if old_path.startswith('/comics-1/'):
+                                new_path = old_path.replace('/comics-1/', 'comics/')
+                                details['folder'] = new_path
+                                
+                                # Update the database
+                                cursor.execute(
+                                    "UPDATE volume_details SET details_json = ? WHERE volume_id = ?",
+                                    (json.dumps(details), volume_id)
+                                )
+                                updated_count += 1
+                                print(f"Updated volume {volume_id}: {old_path} -> {new_path}")
+                    except Exception as e:
+                        print(f"Error updating volume {volume_id}: {e}")
+                        continue
                 
                 conn.commit()
-                print(f"✅ Successfully updated {updated_count} volume paths to relative format")
+                print(f"✅ Updated {updated_count} volume paths to relative format")
                 return True
                 
         except Exception as e:
-            print(f"❌ Error updating paths to relative: {e}")
+            print(f"❌ Error updating database paths: {e}")
             return False
 
     def force_schema_migration(self) -> bool:
-        """Force database schema migration by recreating the database with new schema"""
+        """Force database schema migration to add missing columns"""
         try:
-            print("🔄 Forcing database schema migration...")
-            
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Get existing data
-                cursor.execute("SELECT id, volume_folder, status, last_updated FROM volumes")
-                existing_volumes = cursor.fetchall()
-                
-                cursor.execute("SELECT volume_id, details_json, last_updated FROM volume_details")
-                existing_details = cursor.fetchall()
-                
-                cursor.execute("SELECT key, value, last_updated FROM cache_metadata")
-                existing_cache = cursor.fetchall()
-                
-                print(f"📊 Backing up {len(existing_volumes)} volumes, {len(existing_details)} details, {len(existing_cache)} cache entries")
-                
-                # Drop and recreate tables with new schema
-                cursor.execute("DROP TABLE IF EXISTS volumes")
-                cursor.execute("DROP TABLE IF EXISTS volume_details")
-                cursor.execute("DROP TABLE IF EXISTS cache_metadata")
-                cursor.execute("DROP TABLE IF EXISTS issue_metadata_status")
-                
-                # Recreate tables with new schema
-                cursor.execute('''
-                    CREATE TABLE volumes (
-                        id INTEGER PRIMARY KEY,
-                        volume_folder TEXT NOT NULL,
-                        status TEXT DEFAULT 'available',
-                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        total_issues INTEGER DEFAULT 0,
-                        issues_with_files INTEGER DEFAULT 0,
-                        metadata_processed BOOLEAN DEFAULT FALSE,
-                        xml_generated BOOLEAN DEFAULT FALSE,
-                        metadata_injected BOOLEAN DEFAULT FALSE
-                    )
-                ''')
-                
-                cursor.execute('''
-                    CREATE TABLE volume_details (
-                        volume_id INTEGER PRIMARY KEY,
-                        details_json TEXT NOT NULL,
-                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (volume_id) REFERENCES volumes (id)
-                    )
-                ''')
-                
-                cursor.execute('''
-                    CREATE TABLE issue_metadata_status (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        volume_id INTEGER NOT NULL,
-                        issue_comicvine_id TEXT NOT NULL,
-                        issue_number TEXT,
-                        metadata_processed BOOLEAN DEFAULT FALSE,
-                        metadata_injected BOOLEAN DEFAULT FALSE,
-                        last_processed TIMESTAMP,
-                        last_injected TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (volume_id) REFERENCES volumes (id),
-                        UNIQUE(volume_id, issue_comicvine_id)
-                    )
-                ''')
-                
-                cursor.execute('''
-                    CREATE TABLE cache_metadata (
-                        key TEXT PRIMARY KEY,
-                        value TEXT NOT NULL,
-                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-                
-                # Create indexes
-                cursor.execute('''
-                    CREATE INDEX idx_issue_metadata_volume_id 
-                    ON issue_metadata_status(volume_id)
-                ''')
-                
-                cursor.execute('''
-                    CREATE INDEX idx_issue_metadata_comicvine_id 
-                    ON issue_metadata_status(issue_comicvine_id)
-                ''')
-                
-                # Restore existing data
-                for volume in existing_volumes:
-                    cursor.execute('''
-                        INSERT INTO volumes (id, volume_folder, status, last_updated)
-                        VALUES (?, ?, ?, ?)
-                    ''', volume)
-                
-                for detail in existing_details:
-                    cursor.execute('''
-                        INSERT INTO volume_details (volume_id, details_json, last_updated)
-                        VALUES (?, ?, ?)
-                    ''', detail)
-                
-                for cache_entry in existing_cache:
-                    cursor.execute('''
-                        INSERT INTO cache_metadata (key, value, last_updated)
-                        VALUES (?, ?, ?)
-                    ''', cache_entry)
+                # Add any missing columns that might be needed
+                self.migrate_database_schema(cursor)
                 
                 conn.commit()
                 print("✅ Database schema migration completed successfully")
                 return True
                 
         except Exception as e:
-            print(f"❌ Error during schema migration: {e}")
+            print(f"❌ Database schema migration failed: {e}")
             return False
+
+    def get_volume_issue_status(self, volume_id: int, volume_details: dict) -> dict:
+        """Get detailed metadata status for all issues in a volume
+        
+        Args:
+            volume_id: ID of the volume
+            volume_details: Volume details from Kapowarr
+            
+        Returns:
+            Dictionary with issue status information
+        """
+        try:
+            if not volume_details or 'issues' not in volume_details:
+                return {'success': False, 'error': 'Volume or issues not found'}
+            
+            # Get status for all issues
+            issues_status = []
+            for issue in volume_details['issues']:
+                comicvine_id = issue.get('comicvine_id')
+                if comicvine_id:
+                    issue_status = self.get_issue_metadata_status(volume_id, comicvine_id)
+                    if issue_status:
+                        issues_status.append({
+                            'issue_index': volume_details['issues'].index(issue),
+                            'issue_number': issue.get('issue_number', 'Unknown'),
+                            'comicvine_id': comicvine_id,
+                            'has_files': bool(issue.get('files') and len(issue['files']) > 0),
+                            'metadata_processed': issue_status.get('metadata_processed', False),
+                            'metadata_injected': issue_status.get('metadata_injected', False),
+                            'last_processed': issue_status.get('last_processed'),
+                            'last_injected': issue_status.get('last_injected'),
+                            'created_at': issue_status.get('created_at')
+                        })
+                    else:
+                        # Issue not in database yet
+                        issues_status.append({
+                            'issue_index': volume_details['issues'].index(issue),
+                            'issue_number': issue.get('issue_number', 'Unknown'),
+                            'comicvine_id': comicvine_id,
+                            'has_files': bool(issue.get('files') and len(issue['files']) > 0),
+                            'metadata_processed': False,
+                            'metadata_injected': False,
+                            'last_processed': None,
+                            'last_injected': None,
+                            'created_at': None
+                        })
+            
+            # Get volume status
+            volume_info = self.get_volumes(limit=None)
+            volume_status = None
+            for vol in volume_info:
+                if vol['id'] == volume_id:
+                    volume_status = vol
+                    break
+            
+            return {
+                'success': True,
+                'volume_id': volume_id,
+                'volume_status': volume_status,
+                'total_issues': len(volume_details['issues']),
+                'issues_with_files': sum(1 for issue in volume_details['issues'] if issue.get('files')),
+                'issues_status': issues_status,
+                'summary': {
+                    'total_issues': len(issues_status),
+                    'issues_with_files': sum(1 for issue in issues_status if issue['has_files']),
+                    'metadata_processed': sum(1 for issue in issues_status if issue['metadata_processed']),
+                    'metadata_injected': sum(1 for issue in issues_status if issue['metadata_injected']),
+                    'needs_processing': sum(1 for issue in issues_status if issue['has_files'] and not issue['metadata_processed']),
+                    'needs_injection': sum(1 for issue in issues_status if issue['metadata_processed'] and not issue['metadata_injected'])
+                }
+            }
+            
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
     
     def update_issue_metadata_status(self, volume_id: int, issue_comicvine_id: str, 
                                    issue_number: str = None, **kwargs) -> bool:
