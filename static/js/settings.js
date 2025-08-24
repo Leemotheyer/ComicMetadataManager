@@ -108,6 +108,7 @@ function resetToDefaults() {
     if (confirm('Are you sure you want to reset all settings to their default values? This will clear your API keys and other customizations.')) {
         document.getElementById('kapowarrUrl').value = 'http://192.168.1.205:5656';
         document.getElementById('kapowarrApiKey').value = '';
+        document.getElementById('kapowarrParentFolder').value = '/comics-1';
         document.getElementById('comicvineApiKey').value = '';
         document.getElementById('tempDirectory').value = './temp';
         document.getElementById('maxConcurrentTasks').value = '3';
@@ -151,6 +152,9 @@ function updateCurrentConfigurationDisplay(settings) {
     }
     if (document.getElementById('currentKapowarrKey')) {
         document.getElementById('currentKapowarrKey').textContent = settings.kapowarr_api_key ? '••••••••' : 'Not set';
+    }
+    if (document.getElementById('currentKapowarrParentFolder')) {
+        document.getElementById('currentKapowarrParentFolder').textContent = settings.kapowarr_parent_folder || 'Not set';
     }
     if (document.getElementById('currentComicVineKey')) {
         document.getElementById('currentComicVineKey').textContent = settings.comicvine_api_key ? '••••••••' : 'Not set';

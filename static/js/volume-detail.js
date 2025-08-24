@@ -3,8 +3,35 @@
  * Specific functionality for the volume detail page
  */
 
+function processMetadataAndInject() {
+    updateStatus('Starting complete metadata workflow...', 'info');
+    
+    const volumeId = getVolumeIdFromPage();
+    
+    fetch(`/api/volume/${volumeId}/metadata`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus(`Metadata processing started successfully`, 'success');
+            showNotification('Success', data.message);
+            
+            // Poll for completion
+            pollTaskStatusAndGenerateXML(data.task_id);
+        } else {
+            updateStatus(`Error: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+        }
+    })
+    .catch(error => {
+        updateStatus(`Error: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+    });
+}
+
 function processMetadata() {
-    updateStatus('Processing metadata from ComicVine...', 'info');
+    updateStatus('Processing metadata from ComicVine for comic file injection...', 'info');
     
     const volumeId = getVolumeIdFromPage();
     
@@ -37,8 +64,8 @@ function pollTaskStatusAndGenerateXML(taskId) {
         .then(data => {
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
-                updateStatus('Metadata processing completed, now generating XML files...', 'success');
-                showNotification('Success', 'Metadata completed, generating XML...');
+                updateStatus('Metadata processing completed, now preparing XML for comic injection...', 'success');
+                showNotification('Success', 'Metadata completed, preparing XML for comic injection...');
                 
                 // Step 2: Generate XML files - use the consolidated function from app.js
                 generateXMLAfterMetadata();
@@ -83,7 +110,7 @@ function pollTaskStatus(taskId) {
 }
 
 function generateXMLAfterMetadata() {
-    updateStatus('Generating XML files...', 'info');
+    updateStatus('Preparing XML metadata for comic injection...', 'info');
     
     const volumeId = getVolumeIdFromPage();
     
@@ -93,27 +120,77 @@ function generateXMLAfterMetadata() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            updateStatus(`Complete! Metadata processed and XML files generated successfully`, 'success');
-            showNotification('Success', 'Metadata and XML generation completed!');
+            updateStatus(`Complete! Metadata processed and XML prepared for comic injection`, 'success');
+            showNotification('Success', 'Metadata and XML preparation completed! Now injecting metadata into comic files...');
             
-            // Offer download
-            if (confirm('Process completed successfully! XML files are ready for download. Would you like to download them now?')) {
-                const filename = data.zip_path.split('/').pop();
-                window.location.href = `/download/${filename}`;
-            }
+            // Automatically proceed to metadata injection
+            setTimeout(() => {
+                injectMetadataIntoComics();
+            }, 1000);
         } else {
-            updateStatus(`Error generating XML: ${data.error}`, 'error');
+            updateStatus(`Error preparing XML: ${data.error}`, 'error');
             showNotification('Error', data.error);
         }
     })
     .catch(error => {
-        updateStatus(`Error generating XML: ${error.message}`, 'error');
+        updateStatus(`Error preparing XML: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+    });
+}
+
+function injectMetadataIntoComics() {
+    const volumeId = getVolumeIdFromPage();
+    
+    if (!volumeId) {
+        updateStatus('Error: Could not determine volume ID', 'error');
+        showNotification('Error', 'Could not determine volume ID');
+        return;
+    }
+    
+    updateStatus(`Starting metadata injection into comic files for volume ${volumeId}...`, 'info');
+    showNotification('Info', 'Starting metadata injection...');
+    
+    fetch(`/api/volume/${volumeId}/inject`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus(`Complete! Metadata injected into comic files for volume ${volumeId}`, 'success');
+            showNotification('Success', data.message);
+            
+            // Show detailed results
+            let resultsMessage = `Injected metadata into ${data.results.length} comic files:\n`;
+            data.results.forEach(result => {
+                const status = result.success ? '✅' : '❌';
+                resultsMessage += `${status} ${result.file}: ${result.success ? result.message : result.error}\n`;
+            });
+            
+            // Show results in a more detailed way
+            showNotification('Results', resultsMessage);
+            
+            // Show final completion message
+            setTimeout(() => {
+                showNotification('Workflow Complete!', 'The entire metadata workflow has been completed successfully!');
+                
+                // Reload the page to show updated status
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
+            }, 2000);
+        } else {
+            updateStatus(`Error injecting metadata: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+        }
+    })
+    .catch(error => {
+        updateStatus(`Error injecting metadata: ${error.message}`, 'error');
         showNotification('Error', error.message);
     });
 }
 
 function generateXML() {
-    updateStatus('Generating XML files...', 'info');
+    updateStatus('Preparing XML metadata for comic injection...', 'info');
     
     const volumeId = getVolumeIdFromPage();
     
@@ -123,21 +200,18 @@ function generateXML() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            updateStatus(`XML generation completed successfully`, 'success');
+            updateStatus(`XML preparation completed successfully`, 'success');
             showNotification('Success', data.message);
             
-            // Offer download
-            if (confirm('XML files generated successfully! Would you like to download them?')) {
-                const filename = data.zip_path.split('/').pop();
-                window.location.href = `/download/${filename}`;
-            }
+            // Show success message without download prompt
+            showNotification('Ready', 'XML metadata is now ready to be injected into comic files. Use the comic injection feature when available.');
         } else {
             updateStatus(`Error: ${data.error}`, 'error');
             showNotification('Error', data.error);
         }
     })
     .catch(error => {
-        updateStatus(`Error generating XML: ${error.message}`, 'error');
+        updateStatus(`Error preparing XML: ${error.message}`, 'error');
         showNotification('Error', error.message);
     });
 }

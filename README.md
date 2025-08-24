@@ -44,10 +44,22 @@ The application uses `config/config.json` for configuration. Key settings includ
 - `kapowarr_url`: Your Kapowarr server URL
 - `kapowarr_api_key`: Your Kapowarr API key
 - `comicvine_api_key`: Your ComicVine API key
+- `kapowarr_parent_folder`: Parent folder path from Kapowarr (e.g., "/comics-1") to map to local "/comics" folder
 - `temp_directory`: Directory for temporary files
 - `max_concurrent_tasks`: Maximum concurrent processing tasks
 
 These can be set from the web GUI in the settings page
+
+## Path Mapping
+
+The application includes a path mapping feature that allows you to map Kapowarr folder paths to your local file system paths. This is useful when Kapowarr uses a different folder structure than your local setup.
+
+### Example
+- **Kapowarr folder**: `/comics-1/DC Comics/Batgirl (2025)`
+- **Local folder**: `/comics/DC Comics/Batgirl (2025)`
+- **Setting**: Set `kapowarr_parent_folder` to `/comics-1`
+
+The application will automatically convert all Kapowarr paths starting with `/comics-1` to use `/comics` as the local parent folder, preserving the relative path structure.
 
 ## Usage
 

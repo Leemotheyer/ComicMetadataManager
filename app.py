@@ -6,14 +6,21 @@ from datetime import datetime
 import threading
 import queue
 import tempfile
-import zipfile
 
 # Import functions from existing scripts
 from KapowarrSearch import check_volume_exists, get_total_volumes_from_stats
 from MetadataGather import ComicMetadataFetcher
-from CreateXML import ComicInfoXMLGenerator
 from settings_manager import settings_manager
 from volume_database import volume_db
+
+# Import utility functions
+from utils import (
+    test_kapowarr_connection_with_settings,
+    test_comicvine_connection_with_settings,
+    cleanup_temp_files,
+    generate_xml_files,
+    map_kapowarr_to_local_path
+)
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = settings_manager.get_setting('flask_secret_key')
@@ -27,7 +34,6 @@ class VolumeManager:
         self.api_key = settings_manager.get_setting('kapowarr_api_key')
         self.base_url = settings_manager.get_setting('kapowarr_url')
         self.metadata_fetcher = ComicMetadataFetcher()
-        self.xml_generator = ComicInfoXMLGenerator()
         
         # Check for new volumes on initialization
         self.check_for_new_volumes()
@@ -57,13 +63,27 @@ class VolumeManager:
     def get_volume_list(self, limit=100, force_refresh=False):
         """Get a list of available volumes using database cache or fresh search"""
         
+        print(f"🔍 get_volume_list called with limit={limit}, force_refresh={force_refresh}")
+        
         # Check if we have valid cached data and don't need to force refresh
-        if not force_refresh and volume_db.is_cache_valid():
-            print("📚 Using cached volume data")
-            cached_volumes = volume_db.get_volumes(limit)
-            if cached_volumes:
-                print(f"✅ Retrieved {len(cached_volumes)} volumes from cache")
-                return cached_volumes
+        if not force_refresh:
+            print("📚 Checking cache validity...")
+            cache_valid = volume_db.is_cache_valid()
+            print(f"📚 Cache valid: {cache_valid}")
+            
+            if cache_valid:
+                print("📚 Using cached volume data")
+                cached_volumes = volume_db.get_volumes(limit)
+                print(f"📚 Retrieved {len(cached_volumes) if cached_volumes else 0} volumes from cache")
+                if cached_volumes:
+                    print(f"✅ Retrieved {len(cached_volumes)} volumes from cache")
+                    return cached_volumes
+                else:
+                    print("⚠️ Cache validation passed but no volumes found in database")
+            else:
+                print("⚠️ Cache validation failed")
+        else:
+            print("🔄 Force refresh requested, skipping cache check")
         
         print("🔄 Cache expired or force refresh requested, searching for volumes...")
         
@@ -91,7 +111,16 @@ class VolumeManager:
                 folder_name = f'Volume {volume_id}'
                 try:
                     volume_details = self.get_volume_details(volume_id)
-                    folder_name = volume_details.get('volume_folder', f'Volume {volume_id}') if volume_details else f'Volume {volume_id}'
+                    if volume_details and 'folder' in volume_details:
+                        # Use the path mapping utility to convert Kapowarr path to local path
+                        kapowarr_parent_folder = settings_manager.get_setting('kapowarr_parent_folder', '/comics-1')
+                        folder_name = map_kapowarr_to_local_path(
+                            volume_details['folder'], 
+                            kapowarr_parent_folder, 
+                            'comics'  # Changed from '/comics' to 'comics' for relative path
+                        )
+                    else:
+                        folder_name = volume_details.get('volume_folder', f'Volume {volume_id}') if volume_details else f'Volume {volume_id}'
                     # Small delay to be respectful to the API when fetching volume details
                     time.sleep(0.02)
                 except:
@@ -211,36 +240,7 @@ class VolumeManager:
             print(f"Error processing volume metadata: {e}")
             return {}
     
-    def generate_xml_files(self, metadata, output_dir="temp_xml"):
-        """Generate XML files for metadata"""
-        try:
-            # Create temporary directory
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Create a temporary metadata file for the XML generator
-            temp_metadata_file = os.path.join(output_dir, "temp_metadata.json")
-            with open(temp_metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-            
-            # Generate XML files using the existing method
-            self.xml_generator.generate_xml_files(temp_metadata_file, output_dir)
-            
-            # Create zip file
-            zip_filename = f"comic_info_xml_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-            zip_path = os.path.join(output_dir, zip_filename)
-            
-            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                for root, dirs, files in os.walk(output_dir):
-                    for file in files:
-                        if file.endswith('.xml'):
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, output_dir)
-                            zipf.write(file_path, arcname)
-            
-            return zip_path
-        except Exception as e:
-            print(f"Error generating XML files: {e}")
-            return None
+
 
 # Initialize volume manager
 volume_manager = VolumeManager()
@@ -332,8 +332,8 @@ def get_task_status(task_id):
         return jsonify({'status': 'not_found'})
 
 @app.route('/api/volume/<int:volume_id>/xml', methods=['POST'])
-def generate_xml_files(volume_id):
-    """Generate XML files for a volume"""
+def prepare_xml_for_injection(volume_id):
+    """Prepare XML metadata for comic file injection"""
     try:
         # Get metadata first
         metadata = volume_manager.process_volume_metadata(volume_id)
@@ -342,19 +342,94 @@ def generate_xml_files(volume_id):
         
         # Generate XML files
         temp_dir = f"temp_xml_{volume_id}_{int(time.time())}"
-        zip_path = volume_manager.generate_xml_files(metadata, temp_dir)
+        xml_dir = generate_xml_files(metadata, temp_dir)
         
-        if zip_path and os.path.exists(zip_path):
+        if xml_dir and os.path.exists(xml_dir):
+            # Count XML files generated
+            xml_files = [f for f in os.listdir(xml_dir) if f.endswith('.xml')]
+            xml_count = len(xml_files)
+            
+            if xml_count > 0:
+                # Update database status
+                volume_db.update_volume_status(volume_id, xml_generated=True)
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'Successfully generated {xml_count} XML files',
+                    'xml_count': xml_count,
+                    'output_directory': xml_dir,
+                    'xml_files': xml_files
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'No XML files were generated'
+                })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to generate XML files'
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/volume/<int:volume_id>/inject', methods=['POST'])
+def inject_metadata_into_comics(volume_id):
+    """Inject metadata into comic files for a specific volume"""
+    try:
+        # Get volume details to get the folder path
+        volume_details = volume_manager.get_volume_details(volume_id)
+        if not volume_details:
+            return jsonify({'success': False, 'error': 'Volume details not found'})
+        
+        # Get the folder path from volume details
+        kapowarr_folder_path = volume_details.get('folder')
+        if not kapowarr_folder_path:
+            return jsonify({'success': False, 'error': 'No folder path found for this volume'})
+        
+        # Check if XML files exist
+        xml_dir = f"temp_xml_{volume_id}_{int(time.time())}"
+        if not os.path.exists(xml_dir):
+            # Try to find existing XML directory
+            existing_dirs = [d for d in os.listdir('.') if d.startswith(f'temp_xml_{volume_id}_')]
+            if existing_dirs:
+                xml_dir = existing_dirs[0]
+            else:
+                return jsonify({'success': False, 'error': 'No XML files found for this volume. Generate XML first.'})
+        
+        # Get list of XML files
+        xml_files = []
+        for item in os.listdir(xml_dir):
+            if item.endswith('.xml'):
+                xml_files.append(os.path.join(xml_dir, item))
+        
+        if not xml_files:
+            return jsonify({'success': False, 'error': 'No XML files found in the output directory'})
+        
+        # Import and use the metadata injector
+        from MetaDataAdd import ComicMetadataInjector
+        
+        injector = ComicMetadataInjector()
+        result = injector.inject_metadata(volume_id, xml_files, kapowarr_folder_path)
+        
+        if result['success']:
             # Update database status
-            volume_db.update_volume_status(volume_id, xml_generated=True)
+            volume_db.update_volume_status(volume_id, metadata_injected=True)
             
             return jsonify({
                 'success': True,
-                'zip_path': zip_path,
-                'message': f'Generated {len(metadata)} XML files (only issues with files)'
+                'message': result['message'],
+                'results': result['results'],
+                'local_folder': result['local_folder'],
+                'kapowarr_folder': result['kapowarr_folder']
             })
         else:
-            return jsonify({'success': False, 'error': 'Failed to generate XML files'})
+            return jsonify({
+                'success': False,
+                'error': result['error']
+            })
+            
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -499,14 +574,11 @@ def test_comicvine_connection_with_settings(settings):
 def cleanup_temp_files():
     """Clean up temporary files"""
     try:
-        import shutil
-        temp_dirs = [d for d in os.listdir('.') if d.startswith('temp_xml')]
-        for temp_dir in temp_dirs:
-            if os.path.isdir(temp_dir):
-                shutil.rmtree(temp_dir)
-        
-        flash('Temporary files cleaned up', 'success')
-        return jsonify({'success': True})
+        if cleanup_temp_files():
+            flash('Temporary files cleaned up', 'success')
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to clean up temporary files'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -579,6 +651,40 @@ def check_for_new_volumes():
                 'volumes_count': current_total
             })
             
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/cache/update-paths', methods=['POST'])
+def update_database_paths():
+    """Update database paths to use relative paths instead of absolute paths"""
+    try:
+        if volume_db.update_paths_to_relative():
+            return jsonify({
+                'success': True, 
+                'message': 'Database paths updated to relative format successfully'
+            })
+        else:
+            return jsonify({
+                'success': False, 
+                'error': 'Failed to update database paths'
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/cache/migrate-schema', methods=['POST'])
+def migrate_database_schema():
+    """Force database schema migration to add missing columns"""
+    try:
+        if volume_db.force_schema_migration():
+            return jsonify({
+                'success': True, 
+                'message': 'Database schema migration completed successfully'
+            })
+        else:
+            return jsonify({
+                'success': False, 
+                'error': 'Failed to migrate database schema'
+            })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

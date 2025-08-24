@@ -253,12 +253,14 @@ function displayFilteredVolumes(volumes) {
                             <small class="text-muted">ID: ${volume.id}</small>
                             <span class="badge bg-success status-badge ms-2">${volume.status}</span>
                             <div class="mt-3">
-                                <a href="/volume/${volume.id}" class="btn btn-outline-primary btn-sm me-2">
-                                    <i class="fas fa-eye me-1"></i>View Details
-                                </a>
-                                <button class="btn btn-outline-success btn-sm" onclick="processMetadataAndGenerateXML(${volume.id})">
-                                    <i class="fas fa-magic me-1"></i>Get Metadata & Generate XML
-                                </button>
+                                <div class="d-grid gap-2 d-md-block">
+                                    <a href="/volume/${volume.id}" class="btn btn-outline-primary btn-sm me-md-2 mb-2">
+                                        <i class="fas fa-eye me-1"></i>View Details
+                                    </a>
+                                    <button class="btn btn-outline-success btn-sm" onclick="processMetadataAndInject(${volume.id})">
+                                        <i class="fas fa-magic me-1"></i>Get Metadata & Inject
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -277,7 +279,7 @@ function displayFilteredVolumes(volumes) {
 /**
  * Metadata and XML Processing Functions
  */
-function processMetadataAndGenerateXML(volumeId = null) {
+function processMetadataAndInject(volumeId = null) {
     // If no volumeId provided, try to get it from the page context
     if (!volumeId) {
         volumeId = getVolumeIdFromPage();
@@ -289,7 +291,7 @@ function processMetadataAndGenerateXML(volumeId = null) {
         return;
     }
     
-    updateStatus(`Starting metadata processing and XML generation for volume ${volumeId}...`, 'info');
+    updateStatus(`Starting complete metadata workflow for volume ${volumeId}...`, 'info');
     
     // Step 1: Process metadata
     fetch(`/api/volume/${volumeId}/metadata`, {
@@ -321,10 +323,10 @@ function pollTaskStatusAndGenerateXML(volumeId, taskId) {
         .then(data => {
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
-                updateStatus(`Metadata processing completed for volume ${volumeId}, now generating XML files...`, 'success');
-                showNotification('Success', 'Metadata completed, generating XML...');
+                updateStatus(`Metadata processing completed for volume ${volumeId}, now preparing XML for comic injection...`, 'success');
+                showNotification('Success', 'Metadata completed, preparing XML for comic injection...');
                 
-                // Step 2: Generate XML files
+                // Step 2: Prepare XML for comic injection
                 generateXMLAfterMetadata(volumeId);
             } else if (data.status === 'error') {
                 clearInterval(pollInterval);
@@ -340,7 +342,7 @@ function pollTaskStatusAndGenerateXML(volumeId, taskId) {
 }
 
 function generateXMLAfterMetadata(volumeId) {
-    updateStatus(`Generating XML files for volume ${volumeId}...`, 'info');
+    updateStatus(`Preparing XML metadata for comic injection for volume ${volumeId}...`, 'info');
     
     fetch(`/api/volume/${volumeId}/xml`, {
         method: 'POST'
@@ -348,21 +350,69 @@ function generateXMLAfterMetadata(volumeId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            updateStatus(`Complete! Metadata processed and XML files generated successfully for volume ${volumeId}`, 'success');
-            showNotification('Success', 'Metadata and XML generation completed!');
+            updateStatus(`Complete! Metadata processed and XML prepared for comic injection for volume ${volumeId}`, 'success');
+            showNotification('Success', 'Metadata and XML preparation completed! Now injecting metadata into comic files...');
             
-            // Offer download
-            if (confirm('Process completed successfully! XML files are ready for download. Would you like to download them now?')) {
-                const filename = data.zip_path.split('/').pop();
-                window.location.href = `/download/${filename}`;
-            }
+            // Automatically proceed to metadata injection
+            setTimeout(() => {
+                injectMetadataIntoComics(volumeId);
+            }, 1000);
         } else {
-            updateStatus(`Error generating XML: ${data.error}`, 'error');
+            updateStatus(`Error preparing XML: ${data.error}`, 'error');
             showNotification('Error', data.error);
         }
     })
     .catch(error => {
-        updateStatus(`Error generating XML: ${error.message}`, 'error');
+        updateStatus(`Error preparing XML: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+    });
+}
+
+function injectMetadataIntoComics(volumeId) {
+    if (!volumeId) {
+        updateStatus('Error: Could not determine volume ID', 'error');
+        showNotification('Error', 'Could not determine volume ID');
+        return;
+    }
+    
+    updateStatus(`Starting metadata injection into comic files for volume ${volumeId}...`, 'info');
+    showNotification('Info', 'Starting metadata injection...');
+    
+    fetch(`/api/volume/${volumeId}/inject`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus(`Complete! Metadata injected into comic files for volume ${volumeId}`, 'success');
+            showNotification('Success', data.message);
+            
+            // Show detailed results
+            let resultsMessage = `Injected metadata into ${data.results.length} comic files:\n`;
+            data.results.forEach(result => {
+                const status = result.success ? '✅' : '❌';
+                resultsMessage += `${status} ${result.file}: ${result.success ? result.message : result.error}\n`;
+            });
+            
+            // Show results in a more detailed way
+            showNotification('Results', resultsMessage);
+            
+            // Show final completion message
+            setTimeout(() => {
+                showNotification('Workflow Complete!', 'The entire metadata workflow has been completed successfully!');
+                
+                // Reload the page to show updated button states
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
+            }, 2000);
+        } else {
+            updateStatus(`Error injecting metadata: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+        }
+    })
+    .catch(error => {
+        updateStatus(`Error injecting metadata: ${error.message}`, 'error');
         showNotification('Error', error.message);
     });
 }
@@ -537,6 +587,48 @@ function clearCache() {
     }
 }
 
+function updateDatabasePaths() {
+    if (confirm('This will update all volume paths in the database to use relative paths instead of absolute paths. Continue?')) {
+        fetch('/api/cache/update-paths', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification('Success', 'Database paths updated successfully');
+                // Reload volumes to show updated data
+                loadVolumes();
+            } else {
+                showNotification('Error', 'Failed to update paths: ' + data.error);
+            }
+        })
+        .catch(error => {
+            showNotification('Error', 'Error updating paths: ' + error.message);
+        });
+    }
+}
+
+function migrateDatabaseSchema() {
+    if (confirm('This will fix the database schema by adding missing columns. This may take a moment. Continue?')) {
+        fetch('/api/cache/migrate-schema', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification('Success', 'Database schema fixed successfully');
+                // Reload volumes to show updated data
+                loadVolumes();
+            } else {
+                showNotification('Error', 'Failed to fix schema: ' + data.error);
+            }
+        })
+        .catch(error => {
+            showNotification('Error', 'Error fixing schema: ' + error.message);
+        });
+    }
+}
+
 function checkForNewVolumes() {
     updateStatus('Checking for new volumes...', 'info');
     
@@ -616,12 +708,15 @@ if (typeof module !== 'undefined' && module.exports) {
         showNotification,
         updateStatus,
         loadVolumes,
-        processMetadataAndGenerateXML,
+        processMetadataAndInject,
+        injectMetadataIntoComics,
         clearFilters,
         cleanupTempFiles,
         getCacheInfo,
         refreshCache,
         clearCache,
+        updateDatabasePaths,
+        migrateDatabaseSchema,
         checkForNewVolumes
     };
 }

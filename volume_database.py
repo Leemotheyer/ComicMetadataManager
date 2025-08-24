@@ -39,7 +39,8 @@ class VolumeDatabase:
                         total_issues INTEGER DEFAULT 0,
                         issues_with_files INTEGER DEFAULT 0,
                         metadata_processed BOOLEAN DEFAULT FALSE,
-                        xml_generated BOOLEAN DEFAULT FALSE
+                        xml_generated BOOLEAN DEFAULT FALSE,
+                        metadata_injected BOOLEAN DEFAULT FALSE
                     )
                 ''')
                 
@@ -62,11 +63,48 @@ class VolumeDatabase:
                     )
                 ''')
                 
+                # Migrate existing database schema if needed
+                self.migrate_database_schema(cursor)
+                
                 conn.commit()
                 print(f"✅ Volume database initialized: {self.db_path}")
                 
         except Exception as e:
             print(f"❌ Error initializing volume database: {e}")
+    
+    def migrate_database_schema(self, cursor):
+        """Migrate existing database schema by adding missing columns"""
+        try:
+            # Check if metadata_injected column exists
+            cursor.execute("PRAGMA table_info(volumes)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            # Add missing columns if they don't exist
+            if 'metadata_injected' not in columns:
+                print("🔄 Adding missing column: metadata_injected")
+                cursor.execute('ALTER TABLE volumes ADD COLUMN metadata_injected BOOLEAN DEFAULT FALSE')
+            
+            if 'total_issues' not in columns:
+                print("🔄 Adding missing column: total_issues")
+                cursor.execute('ALTER TABLE volumes ADD COLUMN total_issues INTEGER DEFAULT 0')
+            
+            if 'issues_with_files' not in columns:
+                print("🔄 Adding missing column: issues_with_files")
+                cursor.execute('ALTER TABLE volumes ADD COLUMN issues_with_files INTEGER DEFAULT 0')
+            
+            if 'metadata_processed' not in columns:
+                print("🔄 Adding missing column: metadata_processed")
+                cursor.execute('ALTER TABLE volumes ADD COLUMN metadata_processed BOOLEAN DEFAULT FALSE')
+            
+            if 'xml_generated' not in columns:
+                print("🔄 Adding missing column: xml_generated")
+                cursor.execute('ALTER TABLE volumes ADD COLUMN xml_generated BOOLEAN DEFAULT FALSE')
+            
+            print("✅ Database schema migration completed")
+            
+        except Exception as e:
+            print(f"⚠️ Warning: Database schema migration failed: {e}")
+            print("This is not critical, but some features may not work correctly")
     
     def store_volumes(self, volumes: List[Dict[str, Any]]) -> bool:
         """Store a list of volumes in the database
@@ -132,7 +170,7 @@ class VolumeDatabase:
                 if limit:
                     cursor.execute('''
                         SELECT id, volume_folder, status, last_updated, 
-                               total_issues, issues_with_files, metadata_processed, xml_generated
+                               total_issues, issues_with_files, metadata_processed, xml_generated, metadata_injected
                         FROM volumes 
                         ORDER BY id 
                         LIMIT ?
@@ -140,7 +178,7 @@ class VolumeDatabase:
                 else:
                     cursor.execute('''
                         SELECT id, volume_folder, status, last_updated, 
-                               total_issues, issues_with_files, metadata_processed, xml_generated
+                               total_issues, issues_with_files, metadata_processed, xml_generated, metadata_injected
                         FROM volumes 
                         ORDER BY id
                     ''')
@@ -157,7 +195,8 @@ class VolumeDatabase:
                         'total_issues': row[4],
                         'issues_with_files': row[5],
                         'metadata_processed': bool(row[6]),
-                        'xml_generated': bool(row[7])
+                        'xml_generated': bool(row[7]),
+                        'metadata_injected': bool(row[8])
                     })
                 
                 return volumes
@@ -193,11 +232,31 @@ class VolumeDatabase:
                 total_issues = len(issues)
                 issues_with_files = sum(1 for issue in issues if issue.get('files'))
                 
-                cursor.execute('''
-                    UPDATE volumes 
-                    SET total_issues = ?, issues_with_files = ?, last_updated = ?
-                    WHERE id = ?
-                ''', (total_issues, issues_with_files, datetime.now(), volume_id))
+                # Update volume folder if available in details
+                volume_folder = None
+                if 'folder' in details:
+                    # Use the path mapping utility to convert Kapowarr path to local path
+                    from utils import map_kapowarr_to_local_path
+                    from settings_manager import settings_manager
+                    kapowarr_parent_folder = settings_manager.get_setting('kapowarr_parent_folder', '/comics-1')
+                    volume_folder = map_kapowarr_to_local_path(
+                        details['folder'], 
+                        kapowarr_parent_folder, 
+                        'comics'  # Changed from '/comics' to 'comics' for relative path
+                    )
+                
+                if volume_folder:
+                    cursor.execute('''
+                        UPDATE volumes 
+                        SET total_issues = ?, issues_with_files = ?, volume_folder = ?, last_updated = ?
+                        WHERE id = ?
+                    ''', (total_issues, issues_with_files, volume_folder, datetime.now(), volume_id))
+                else:
+                    cursor.execute('''
+                        UPDATE volumes 
+                        SET total_issues = ?, issues_with_files = ?, last_updated = ?
+                        WHERE id = ?
+                    ''', (total_issues, issues_with_files, datetime.now(), volume_id))
                 
                 conn.commit()
                 return True
@@ -256,7 +315,7 @@ class VolumeDatabase:
                 values = []
                 
                 for key, value in kwargs.items():
-                    if key in ['metadata_processed', 'xml_generated', 'total_issues', 'issues_with_files']:
+                    if key in ['metadata_processed', 'xml_generated', 'metadata_injected', 'total_issues', 'issues_with_files']:
                         fields.append(f"{key} = ?")
                         values.append(value)
                 
@@ -286,8 +345,20 @@ class VolumeDatabase:
             True if cache is valid, False otherwise
         """
         try:
+            print(f"🔍 Checking cache validity with max_age_hours={max_age_hours}")
+            print(f"🔍 Database path: {self.db_path}")
+            
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # Check if cache_metadata table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cache_metadata'")
+                table_exists = cursor.fetchone()
+                print(f"🔍 cache_metadata table exists: {table_exists is not None}")
+                
+                if not table_exists:
+                    print("⚠️ cache_metadata table does not exist")
+                    return False
                 
                 cursor.execute('''
                     SELECT last_updated FROM cache_metadata 
@@ -295,12 +366,23 @@ class VolumeDatabase:
                 ''')
                 
                 row = cursor.fetchone()
+                print(f"🔍 Found cache_metadata row: {row}")
+                
                 if row:
                     last_updated = datetime.fromisoformat(row[0])
                     max_age = timedelta(hours=max_age_hours)
-                    return datetime.now() - last_updated < max_age
-                
-                return False
+                    cache_age = datetime.now() - last_updated
+                    is_valid = cache_age < max_age
+                    
+                    print(f"🔍 Last updated: {last_updated}")
+                    print(f"🔍 Cache age: {cache_age}")
+                    print(f"🔍 Max age: {max_age}")
+                    print(f"🔍 Is valid: {is_valid}")
+                    
+                    return is_valid
+                else:
+                    print("⚠️ No volumes_count key found in cache_metadata")
+                    return False
                 
         except Exception as e:
             print(f"❌ Error checking cache validity: {e}")
@@ -470,6 +552,128 @@ class VolumeDatabase:
                 
         except Exception as e:
             print(f"❌ Error cleaning up old data: {e}")
+            return False
+
+    def update_paths_to_relative(self) -> bool:
+        """Update existing volume folders to use relative paths instead of absolute paths"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get all volumes with absolute paths
+                cursor.execute("SELECT id, volume_folder FROM volumes WHERE volume_folder LIKE '/comics/%'")
+                volumes_to_update = cursor.fetchall()
+                
+                if not volumes_to_update:
+                    print("✅ No volumes with absolute paths found, nothing to update")
+                    return True
+                
+                print(f"🔄 Found {len(volumes_to_update)} volumes with absolute paths, updating to relative...")
+                
+                updated_count = 0
+                for volume_id, old_folder in volumes_to_update:
+                    # Convert /comics/... to comics/...
+                    new_folder = old_folder.replace('/comics/', 'comics/')
+                    
+                    cursor.execute('''
+                        UPDATE volumes 
+                        SET volume_folder = ?, last_updated = ?
+                        WHERE id = ?
+                    ''', (new_folder, datetime.now(), volume_id))
+                    
+                    updated_count += 1
+                    print(f"  Updated volume {volume_id}: {old_folder} → {new_folder}")
+                
+                conn.commit()
+                print(f"✅ Successfully updated {updated_count} volume paths to relative format")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Error updating paths to relative: {e}")
+            return False
+
+    def force_schema_migration(self) -> bool:
+        """Force database schema migration by recreating the database with new schema"""
+        try:
+            print("🔄 Forcing database schema migration...")
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get existing data
+                cursor.execute("SELECT id, volume_folder, status, last_updated FROM volumes")
+                existing_volumes = cursor.fetchall()
+                
+                cursor.execute("SELECT volume_id, details_json, last_updated FROM volume_details")
+                existing_details = cursor.fetchall()
+                
+                cursor.execute("SELECT key, value, last_updated FROM cache_metadata")
+                existing_cache = cursor.fetchall()
+                
+                print(f"📊 Backing up {len(existing_volumes)} volumes, {len(existing_details)} details, {len(existing_cache)} cache entries")
+                
+                # Drop and recreate tables with new schema
+                cursor.execute("DROP TABLE IF EXISTS volumes")
+                cursor.execute("DROP TABLE IF EXISTS volume_details")
+                cursor.execute("DROP TABLE IF EXISTS cache_metadata")
+                
+                # Recreate tables with new schema
+                cursor.execute('''
+                    CREATE TABLE volumes (
+                        id INTEGER PRIMARY KEY,
+                        volume_folder TEXT NOT NULL,
+                        status TEXT DEFAULT 'available',
+                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        total_issues INTEGER DEFAULT 0,
+                        issues_with_files INTEGER DEFAULT 0,
+                        metadata_processed BOOLEAN DEFAULT FALSE,
+                        xml_generated BOOLEAN DEFAULT FALSE,
+                        metadata_injected BOOLEAN DEFAULT FALSE
+                    )
+                ''')
+                
+                cursor.execute('''
+                    CREATE TABLE volume_details (
+                        volume_id INTEGER PRIMARY KEY,
+                        details_json TEXT NOT NULL,
+                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (volume_id) REFERENCES volumes (id)
+                    )
+                ''')
+                
+                cursor.execute('''
+                    CREATE TABLE cache_metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
+                # Restore existing data
+                for volume in existing_volumes:
+                    cursor.execute('''
+                        INSERT INTO volumes (id, volume_folder, status, last_updated)
+                        VALUES (?, ?, ?, ?)
+                    ''', volume)
+                
+                for detail in existing_details:
+                    cursor.execute('''
+                        INSERT INTO volume_details (volume_id, details_json, last_updated)
+                        VALUES (?, ?, ?)
+                    ''', detail)
+                
+                for cache_entry in existing_cache:
+                    cursor.execute('''
+                        INSERT INTO cache_metadata (key, value, last_updated)
+                        VALUES (?, ?, ?)
+                    ''', cache_entry)
+                
+                conn.commit()
+                print("✅ Database schema migration completed successfully")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Error during schema migration: {e}")
             return False
 
 

@@ -49,6 +49,17 @@
                                         <div class="form-text">Your Kapowarr API key for authentication</div>
                                     </div>
                                 </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3">
+                                        <label for="kapowarrParentFolder" class="form-label">
+                                            <i class="fas fa-folder-tree me-1"></i>Kapowarr Parent Folder
+                                        </label>
+                                        <input type="text" class="form-control" id="kapowarrParentFolder" name="kapowarr_parent_folder" 
+                                               value="{{ settings.kapowarr_parent_folder or '/comics-1' }}" 
+                                               placeholder="/comics-1">
+                                        <div class="form-text">Parent folder path from Kapowarr (e.g., /comics-1) to map to local /comics folder</div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="row">
@@ -165,6 +176,7 @@
                                 <h6>Kapowarr Settings</h6>
                                 <p><strong>URL:</strong> <span id="currentKapowarrUrl">{{ settings.kapowarr_url or 'Not set' }}</span></p>
                                 <p><strong>API Key:</strong> <span id="currentKapowarrKey">{{ '••••••••' if settings.kapowarr_api_key else 'Not set' }}</span></p>
+                                <p><strong>Parent Folder:</strong> <span id="currentKapowarrParentFolder">{{ settings.kapowarr_parent_folder or 'Not set' }}</span></p>
                             </div>
                             <div class="col-md-6">
                                 <h6>ComicVine Settings</h6>

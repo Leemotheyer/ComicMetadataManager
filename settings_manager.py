@@ -16,6 +16,7 @@ class SettingsManager:
         'kapowarr_url': 'http://192.168.1.205:5656',
         'kapowarr_api_key': '',
         'comicvine_api_key': '',
+        'kapowarr_parent_folder': '/comics-1',
         'temp_directory': './temp',
         'max_concurrent_tasks': 3,
         'task_timeout': 30,
@@ -104,6 +105,16 @@ class SettingsManager:
         # API Keys
         validated['kapowarr_api_key'] = settings.get('kapowarr_api_key', '').strip()
         validated['comicvine_api_key'] = settings.get('comicvine_api_key', '').strip()
+        
+        # Kapowarr Parent Folder
+        kapowarr_parent_folder = settings.get('kapowarr_parent_folder', '').strip()
+        if kapowarr_parent_folder:
+            # Ensure it's a relative path
+            if os.path.isabs(kapowarr_parent_folder):
+                kapowarr_parent_folder = os.path.relpath(kapowarr_parent_folder)
+            validated['kapowarr_parent_folder'] = kapowarr_parent_folder
+        else:
+            validated['kapowarr_parent_folder'] = self.DEFAULT_SETTINGS['kapowarr_parent_folder']
         
         # Temp Directory
         temp_dir = settings.get('temp_directory', '').strip()
@@ -283,6 +294,7 @@ class SettingsManager:
                 "kapowarr_url": "http://your-kapowarr-server:port",
                 "kapowarr_api_key": "your-kapowarr-api-key-here",
                 "comicvine_api_key": "your-comicvine-api-key-here",
+                "kapowarr_parent_folder": "/comics-1",
                 "temp_directory": "./temp",
                 "max_concurrent_tasks": 3,
                 "task_timeout": 30,
