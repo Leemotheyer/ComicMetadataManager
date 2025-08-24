@@ -196,7 +196,12 @@ function applyFiltersAndDisplay() {
         filteredVolumes.sort((a, b) => {
             const folderA = a.volume_folder || `Volume ${a.id}`;
             const folderB = b.volume_folder || `Volume ${b.id}`;
-            return folderA.localeCompare(folderB);
+            
+            // Extract just the filename (last part after the last slash) for sorting
+            const filenameA = folderA.split('/').pop() || folderA;
+            const filenameB = folderB.split('/').pop() || folderB;
+            
+            return filenameA.localeCompare(filenameB);
         });
     } else {
         // Sort by ID (default)
