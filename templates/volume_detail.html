@@ -87,9 +87,12 @@
                                              <button class="btn btn-primary btn-lg" onclick="processMetadataAndInject()">
                                                  <i class="fas fa-magic me-2"></i>Get Metadata
                                              </button>
-                                             <button class="btn btn-warning" onclick="refreshVolume()">
-                                                 <i class="fas fa-sync-alt me-2"></i>Refresh Volume Data
-                                             </button>
+                                                                                           <button class="btn btn-warning" onclick="refreshVolume()">
+                                                  <i class="fas fa-sync-alt me-2"></i>Refresh Volume Data
+                                              </button>
+                                              <button class="btn btn-info" onclick="cleanupTempDirectories()">
+                                                  <i class="fas fa-broom me-2"></i>Cleanup Temp Files
+                                              </button>
                                          </div>
                                      </div>
                                  </div>
@@ -163,6 +166,38 @@
                                                              <span class="text-muted">No files</span>
                                                          {% endif %}
                                                      </small>
+                                                 </div>
+                                                 
+                                                 <!-- Issue Actions -->
+                                                 <div class="mt-3">
+                                                     {% if issue.files and issue.files|length > 0 and issue.comicvine_id %}
+                                                         <button class="btn btn-sm btn-primary w-100" 
+                                                                 onclick="processIssueMetadata({{ volume_id }}, {{ loop.index0 }}, '{{ issue.issue_number if issue.issue_number else 'Unknown' }}')"
+                                                                 data-issue-index="{{ loop.index0 }}"
+                                                                 data-issue-number="{{ issue.issue_number if issue.issue_number else 'Unknown' }}">
+                                                             <i class="fas fa-download me-1"></i>Get Metadata
+                                                         </button>
+                                                         <div class="mt-2">
+                                                             <small class="text-muted issue-status" id="issue-status-{{ loop.index0 }}">
+                                                                 Ready to process
+                                                             </small>
+                                                         </div>
+                                                         <!-- Metadata Info (hidden by default) -->
+                                                         <div class="mt-2 metadata-info" id="metadata-info-{{ loop.index0 }}" style="display: none;">
+                                                             <small class="text-success">
+                                                                 <i class="fas fa-info-circle me-1"></i>
+                                                                 <span class="metadata-summary">Metadata available</span>
+                                                             </small>
+                                                         </div>
+                                                     {% elif issue.files and issue.files|length > 0 %}
+                                                         <button class="btn btn-sm btn-secondary w-100" disabled>
+                                                             <i class="fas fa-exclamation-triangle me-1"></i>No ComicVine ID
+                                                         </button>
+                                                     {% else %}
+                                                         <button class="btn btn-sm btn-secondary w-100" disabled>
+                                                             <i class="fas fa-exclamation-triangle me-1"></i>No Files
+                                                         </button>
+                                                     {% endif %}
                                                  </div>
                                             </div>
                                         </div>

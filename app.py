@@ -323,6 +323,282 @@ def process_volume_metadata(volume_id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/volume/<int:volume_id>/issue/<int:issue_index>/metadata', methods=['POST'])
+def process_issue_metadata(volume_id, issue_index):
+    """Process metadata for a specific issue by index and inject into comic files"""
+    try:
+        # Start background task
+        task_id = f"issue_metadata_{volume_id}_{issue_index}_{int(time.time())}"
+        
+        def issue_metadata_task():
+            try:
+                # Get volume details to find the specific issue
+                volume_details = volume_manager.get_volume_details(volume_id)
+                if not volume_details or 'issues' not in volume_details:
+                    task_results[task_id] = {
+                        'status': 'error',
+                        'error': 'Volume or issues not found'
+                    }
+                    return
+                
+                # Check if issue index is valid
+                if issue_index < 0 or issue_index >= len(volume_details['issues']):
+                    task_results[task_id] = {
+                        'status': 'error',
+                        'error': f'Issue index {issue_index} is out of range. Volume has {len(volume_details["issues"])} issues.'
+                    }
+                    return
+                
+                # Get the specific issue by index
+                target_issue = volume_details['issues'][issue_index]
+                
+                # Check if issue has files
+                if not target_issue.get('files') or len(target_issue['files']) == 0:
+                    task_results[task_id] = {
+                        'status': 'error',
+                        'error': f'Issue {issue_index} has no files to process'
+                    }
+                    return
+                
+                # Check if issue has ComicVine ID
+                comicvine_id = target_issue.get('comicvine_id')
+                if not comicvine_id:
+                    task_results[task_id] = {
+                        'status': 'error',
+                        'error': f'Issue {issue_index} has no ComicVine ID'
+                    }
+                    return
+                
+                # Fetch metadata from ComicVine
+                metadata = volume_manager.metadata_fetcher.get_comicvine_metadata(comicvine_id)
+                if not metadata:
+                    task_results[task_id] = {
+                        'status': 'error',
+                        'error': f'Failed to fetch metadata from ComicVine for issue {comicvine_id}'
+                    }
+                    return
+                
+                # Now inject the metadata into the comic files (like the main workflow does)
+                try:
+                    # Get the folder path from volume details
+                    kapowarr_folder_path = volume_details.get('folder')
+                    if not kapowarr_folder_path:
+                        task_results[task_id] = {
+                            'status': 'error',
+                            'error': 'No folder path found for this volume'
+                        }
+                        return
+                    
+                    # Import and use the metadata injector
+                    from MetaDataAdd import ComicMetadataInjector
+                    
+                    # Create a temporary XML file for this specific issue
+                    import tempfile
+                    import os
+                    
+                    # Create a temporary directory for the XML
+                    temp_dir = f"temp_xml_issue_{volume_id}_{issue_index}_{int(time.time())}"
+                    os.makedirs(temp_dir, exist_ok=True)
+                    
+                    # Generate XML content for this issue
+                    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <Title>{metadata.get('name', 'Unknown')}</Title>
+    <Series>{metadata.get('volume', {}).get('name', 'Unknown') if metadata.get('volume') else 'Unknown'}</Series>
+    <Number>{target_issue.get('issue_number', 'Unknown')}</Number>
+    <Count>{volume_details.get('issue_count', 0)}</Count>
+    <Volume>{metadata.get('volume', {}).get('name', 'Unknown') if metadata.get('volume') else 'Unknown'}</Volume>
+    <AlternateSeries>{metadata.get('volume', {}).get('name', 'Unknown') if metadata.get('volume') else 'Unknown'}</AlternateSeries>
+    <AlternateNumber>{target_issue.get('issue_number', 'Unknown')}</AlternateNumber>
+    <AlternateCount>{volume_details.get('issue_count', 0)}</AlternateCount>
+    <Summary>{metadata.get('description', 'No description available')}</Summary>
+    <Notes>Processed by Comic Metadata Manager</Notes>
+    <Year>{metadata.get('cover_date', '')[:4] if metadata.get('cover_date') else ''}</Year>
+    <Month>{metadata.get('cover_date', '')[5:7] if metadata.get('cover_date') and len(metadata.get('cover_date', '')) > 7 else ''}</Month>
+    <Day>{metadata.get('cover_date', '')[8:10] if metadata.get('cover_date') and len(metadata.get('cover_date', '')) > 10 else ''}</Day>
+    <Writer>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'writer'])}</Writer>
+    <Penciller>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'penciler'])}</Penciller>
+    <Inker>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'inker'])}</Inker>
+    <Colorist>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'colorist'])}</Colorist>
+    <Letterer>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'letterer'])}</Letterer>
+    <CoverArtist>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'cover'])}</CoverArtist>
+    <Editor>{', '.join([person['name'] for person in metadata.get('person_credits', []) if person.get('role') == 'editor'])}</Editor>
+    <Publisher>{metadata.get('publisher', {}).get('name', 'Unknown') if metadata.get('publisher') else 'Unknown'}</Publisher>
+    <Imprint>{metadata.get('imprint', {}).get('name', 'Unknown') if metadata.get('imprint') else 'Unknown'}</Imprint>
+    <Genre>{', '.join([genre['name'] for genre in metadata.get('genres', [])])}</Genre>
+    <Web>{metadata.get('site_detail_url', '')}</Web>
+    <PageCount>{metadata.get('page_count', 0)}</PageCount>
+    <LanguageISO>en</LanguageISO>
+    <Format>Comic</Format>
+    <AgeRating>Unknown</AgeRating>
+    <Manga>No</Manga>
+    <BlackAndWhite>No</BlackAndWhite>
+    <ScanInformation>Comic Metadata Manager</ScanInformation>
+</ComicInfo>"""
+                    
+                    # Write XML to temporary file
+                    xml_file_path = os.path.join(temp_dir, f"issue_{issue_index}.xml")
+                    with open(xml_file_path, 'w', encoding='utf-8') as f:
+                        f.write(xml_content)
+                    
+                    # Get the specific files for this issue only
+                    issue_files = target_issue.get('files', [])
+                    if not issue_files:
+                        task_results[task_id] = {
+                            'status': 'error',
+                            'error': f'No files found for issue {issue_index}'
+                        }
+                        return
+                    
+                    # Map Kapowarr path to local path
+                    local_folder_path = None
+                    if hasattr(volume_manager, 'metadata_fetcher') and hasattr(volume_manager.metadata_fetcher, '_map_kapowarr_to_local_path'):
+                        local_folder_path = volume_manager.metadata_fetcher._map_kapowarr_to_local_path(
+                            kapowarr_folder_path, 
+                            '/comics-1', 
+                            'comics'
+                        )
+                    else:
+                        # Fallback: try to convert path manually
+                        if kapowarr_folder_path.startswith('/comics-1/'):
+                            local_folder_path = kapowarr_folder_path.replace('/comics-1/', 'comics/')
+                        else:
+                            local_folder_path = kapowarr_folder_path
+                    
+                    if not local_folder_path or not os.path.exists(local_folder_path):
+                        task_results[task_id] = {
+                            'status': 'error',
+                            'error': f'Local folder not found: {local_folder_path}'
+                        }
+                        return
+                    
+                    # Process only the files for this specific issue
+                    results = []
+                    for issue_file in issue_files:
+                        file_path = issue_file.get('filepath', '')
+                        if not file_path:
+                            continue
+                            
+                        # Extract just the filename from the full path
+                        filename = os.path.basename(file_path)
+                        
+                        # Look for this specific file in the local folder
+                        local_file_path = os.path.join(local_folder_path, filename)
+                        
+                        if os.path.exists(local_file_path):
+                            try:
+                                # Use the ComicMetadataInjector to process just this one file
+                                injector = ComicMetadataInjector()
+                                
+                                # Create a temporary XML file specifically for this file
+                                file_xml_path = os.path.join(temp_dir, f"file_{filename}.xml")
+                                with open(file_xml_path, 'w', encoding='utf-8') as f:
+                                    f.write(xml_content)
+                                
+                                # Process just this one file
+                                file_result = injector._process_comic_file(
+                                    local_file_path, 
+                                    [file_xml_path], 
+                                    volume_id, 
+                                    []
+                                )
+                                
+                                results.append({
+                                    'file': filename,
+                                    'success': file_result.get('success', False),
+                                    'message': file_result.get('message', 'Unknown result'),
+                                    'error': file_result.get('error', '')
+                                })
+                                
+                            except Exception as e:
+                                results.append({
+                                    'file': filename,
+                                    'success': False,
+                                    'error': str(e)
+                                })
+                        else:
+                            results.append({
+                                'file': filename,
+                                'success': False,
+                                'error': 'File not found in local folder'
+                            })
+                    
+                    # Store the result
+                    task_results[task_id] = {
+                        'status': 'completed',
+                        'result': {
+                            'comicvine_id': comicvine_id,
+                            'issue_index': issue_index,
+                            'kapowarr_issue': target_issue,
+                            'comicvine_metadata': metadata,
+                            'injection_results': results,
+                            'local_folder': local_folder_path,
+                            'kapowarr_folder': kapowarr_folder_path
+                        },
+                        'message': f'Successfully processed and injected metadata for issue {issue_index} ({len(results)} files)'
+                    }
+                    
+                    # Clean up temporary directory and any other temp dirs created during processing
+                    try:
+                        import shutil
+                        import glob
+                        
+                        # Remove our main temp directory
+                        if os.path.exists(temp_dir):
+                            shutil.rmtree(temp_dir)
+                        
+                        # Also clean up any other temp directories that might have been created
+                        # Look for temp directories related to this volume and issue
+                        temp_patterns = [
+                            f"temp_xml_issue_{volume_id}_{issue_index}_*",
+                            f"temp_xml_{volume_id}_*",  # General volume temp dirs
+                            f"temp_injection_*"  # Any injection temp dirs
+                        ]
+                        
+                        for pattern in temp_patterns:
+                            temp_dirs = glob.glob(pattern)
+                            for temp_dir_path in temp_dirs:
+                                if os.path.exists(temp_dir_path) and os.path.isdir(temp_dir_path):
+                                    try:
+                                        shutil.rmtree(temp_dir_path)
+                                        print(f"Cleaned up temp directory: {temp_dir_path}")
+                                    except Exception as cleanup_error:
+                                        print(f"Failed to clean up {temp_dir_path}: {cleanup_error}")
+                        
+                    except Exception as cleanup_error:
+                        print(f"Error during cleanup: {cleanup_error}")
+                        # Try to clean up at least the main temp directory
+                        try:
+                            if os.path.exists(temp_dir):
+                                shutil.rmtree(temp_dir)
+                        except:
+                            pass
+                    
+                except Exception as injection_error:
+                    task_results[task_id] = {
+                        'status': 'error',
+                        'error': f'Failed to inject metadata into comic files: {str(injection_error)}'
+                    }
+                
+            except Exception as e:
+                task_results[task_id] = {
+                    'status': 'error',
+                    'error': str(e)
+                }
+        
+        # Start task in background
+        thread = threading.Thread(target=issue_metadata_task)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'message': f'Metadata processing and injection started for issue {issue_index}'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/api/task/<task_id>/status')
 def get_task_status(task_id):
     """Get status of a background task"""
@@ -685,6 +961,50 @@ def migrate_database_schema():
                 'success': False, 
                 'error': 'Failed to migrate database schema'
             })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/cleanup/temp', methods=['POST'])
+def cleanup_temp_directories():
+    """Clean up any orphaned temporary directories"""
+    try:
+        import shutil
+        import glob
+        import os
+        
+        cleaned_dirs = []
+        failed_dirs = []
+        
+        # Look for various types of temp directories
+        temp_patterns = [
+            "temp_xml_*",
+            "temp_injection_*",
+            "temp_*"
+        ]
+        
+        for pattern in temp_patterns:
+            temp_dirs = glob.glob(pattern)
+            for temp_dir_path in temp_dirs:
+                if os.path.exists(temp_dir_path) and os.path.isdir(temp_dir_path):
+                    try:
+                        shutil.rmtree(temp_dir_path)
+                        cleaned_dirs.append(temp_dir_path)
+                    except Exception as cleanup_error:
+                        failed_dirs.append(f"{temp_dir_path}: {cleanup_error}")
+        
+        if cleaned_dirs:
+            message = f"Cleaned up {len(cleaned_dirs)} temporary directories"
+        else:
+            message = "No temporary directories found to clean up"
+            
+        return jsonify({
+            'success': True,
+            'message': message,
+            'cleaned_dirs': cleaned_dirs,
+            'failed_dirs': failed_dirs,
+            'total_cleaned': len(cleaned_dirs)
+        })
+        
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

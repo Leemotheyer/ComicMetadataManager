@@ -193,7 +193,7 @@ body {
     /* width: 140px; */
     height: 200px;
     overflow: hidden;
-    background-color: #f8f9fa;
+    background-color: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -206,7 +206,7 @@ body {
     width: 200px;
     height: 280px;
     overflow: hidden;
-    background-color: #f8f9fa;
+    background-color: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -343,6 +343,45 @@ body {
     border-width: 2px;
 }
 
+/* Issue Status Indicators */
+.issue-status {
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.issue-status.text-info {
+    color: var(--info-blue) !important;
+}
+
+.issue-status.text-success {
+    color: var(--success-green) !important;
+}
+
+.issue-status.text-danger {
+    color: var(--error-red) !important;
+}
+
+/* Issue Action Buttons */
+.issue-card .btn {
+    transition: all 0.2s ease;
+}
+
+.issue-card .btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.issue-card .btn-success {
+    background-color: var(--success-green) !important;
+    border-color: var(--success-green) !important;
+    color: white !important;
+}
+
+.issue-card .btn-success:hover {
+    background-color: #218838 !important;
+    border-color: #1e7e34 !important;
+}
+
 /* Linked Badges */
 .badge.bg-info a {
     color: var(--light-text);
@@ -446,7 +485,7 @@ body {
 
 /* Volume Detail Page Specific Styles */
 .metadata-section {
-    background-color: #f8f9fa;
+    background-color: transparent;
     border-radius: 8px;
     padding: 15px;
     margin-bottom: 20px;

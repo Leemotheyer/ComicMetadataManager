@@ -57,6 +57,151 @@ function processMetadata() {
     });
 }
 
+function processIssueMetadata(volumeId, issueIndex, issueNumber) {
+    // Update the specific issue's status
+    const issueStatusElement = document.getElementById(`issue-status-${issueIndex}`);
+    if (issueStatusElement) {
+        issueStatusElement.textContent = 'Processing metadata...';
+        issueStatusElement.className = 'text-info';
+    }
+    
+    // Disable the button for this issue
+    const issueButton = document.querySelector(`[data-issue-index="${issueIndex}"]`);
+    if (issueButton) {
+        issueButton.disabled = true;
+        issueButton.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Processing...';
+    }
+    
+    updateStatus(`Processing metadata for issue ${issueNumber}...`, 'info');
+    
+    fetch(`/api/volume/${volumeId}/issue/${issueIndex}/metadata`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus(`Metadata processing started for issue ${issueNumber}`, 'success');
+            showNotification('Success', data.message);
+            
+            // Poll for completion
+            pollIssueTaskStatus(data.task_id, issueIndex, issueNumber);
+        } else {
+            updateStatus(`Error processing issue ${issueNumber}: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+            
+            // Reset issue status on error
+            if (issueStatusElement) {
+                issueStatusElement.textContent = 'Error occurred';
+                issueStatusElement.className = 'text-danger';
+            }
+            if (issueButton) {
+                issueButton.disabled = false;
+                issueButton.innerHTML = '<i class="fas fa-download me-1"></i>Get Metadata';
+            }
+        }
+    })
+    .catch(error => {
+        updateStatus(`Error processing issue ${issueNumber}: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+        
+        // Reset issue status on error
+        if (issueStatusElement) {
+            issueStatusElement.textContent = 'Error occurred';
+            issueStatusElement.className = 'text-danger';
+        }
+        if (issueButton) {
+            issueButton.disabled = false;
+            issueButton.innerHTML = '<i class="fas fa-download me-1"></i>Get Metadata';
+        }
+    });
+}
+
+function pollIssueTaskStatus(taskId, issueIndex, issueNumber) {
+    const pollInterval = setInterval(() => {
+        fetch(`/api/task/${taskId}/status`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'completed') {
+                clearInterval(pollInterval);
+                updateStatus(`Metadata processing and injection completed for issue ${issueNumber}`, 'success');
+                showNotification('Success', data.message);
+                
+                // Show detailed results if available
+                if (data.result && data.result.injection_results) {
+                    let resultsMessage = `Injected metadata into ${data.result.injection_results.length} comic files:\n`;
+                    data.result.injection_results.forEach(result => {
+                        const status = result.success ? '✅' : '❌';
+                        resultsMessage += `${status} ${result.file}: ${result.success ? result.message : result.error}\n`;
+                    });
+                    showNotification('Injection Results', resultsMessage);
+                }
+                
+                // Update issue status
+                const issueStatusElement = document.getElementById(`issue-status-${issueIndex}`);
+                if (issueStatusElement) {
+                    issueStatusElement.textContent = 'Metadata injected successfully';
+                    issueStatusElement.className = 'text-success';
+                }
+                
+                // Show metadata info
+                const metadataInfoElement = document.getElementById(`metadata-info-${issueIndex}`);
+                if (metadataInfoElement) {
+                    metadataInfoElement.style.display = 'block';
+                    // Update the text to show injection was successful
+                    const summaryElement = metadataInfoElement.querySelector('.metadata-summary');
+                    if (summaryElement) {
+                        summaryElement.textContent = 'Metadata injected into comic files';
+                    }
+                }
+                
+                // Re-enable button and update text
+                const issueButton = document.querySelector(`[data-issue-index="${issueIndex}"]`);
+                if (issueButton) {
+                    issueButton.disabled = false;
+                    issueButton.innerHTML = '<i class="fas fa-check me-1"></i>Metadata Injected';
+                    issueButton.className = 'btn btn-sm btn-success w-100';
+                }
+                
+            } else if (data.status === 'error') {
+                clearInterval(pollInterval);
+                updateStatus(`Error processing issue ${issueNumber}: ${data.error}`, 'error');
+                showNotification('Error', data.error);
+                
+                // Update issue status
+                const issueStatusElement = document.getElementById(`issue-status-${issueIndex}`);
+                if (issueStatusElement) {
+                    issueStatusElement.textContent = 'Error occurred';
+                    issueStatusElement.className = 'text-danger';
+                }
+                
+                // Re-enable button
+                const issueButton = document.querySelector(`[data-issue-index="${issueIndex}"]`);
+                if (issueButton) {
+                    issueButton.disabled = false;
+                    issueButton.innerHTML = '<i class="fas fa-download me-1"></i>Get Metadata';
+                }
+            }
+        })
+        .catch(error => {
+            clearInterval(pollInterval);
+            updateStatus(`Error checking task status for issue ${issueNumber}: ${error.message}`, 'error');
+            
+            // Reset issue status on error
+            const issueStatusElement = document.getElementById(`issue-status-${issueIndex}`);
+            if (issueStatusElement) {
+                issueStatusElement.textContent = 'Error occurred';
+                issueStatusElement.className = 'text-danger';
+            }
+            
+            const issueButton = document.querySelector(`[data-issue-index="${issueIndex}"]`);
+            if (issueButton) {
+                issueButton.disabled = false;
+                issueButton.innerHTML = '<i class="fas fa-download me-1"></i>Get Metadata';
+            }
+        });
+    }, 2000);
+}
+
 function pollTaskStatusAndGenerateXML(taskId) {
     const pollInterval = setInterval(() => {
         fetch(`/api/task/${taskId}/status`)
@@ -219,6 +364,36 @@ function generateXML() {
 function refreshVolume() {
     updateStatus('Refreshing volume data...', 'info');
     location.reload();
+}
+
+function cleanupTempDirectories() {
+    updateStatus('Cleaning up temporary directories...', 'info');
+    
+    fetch('/api/cleanup/temp', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus(`Cleanup completed: ${data.message}`, 'success');
+            showNotification('Success', data.message);
+            
+            if (data.cleaned_dirs && data.cleaned_dirs.length > 0) {
+                let detailsMessage = `Cleaned up ${data.total_cleaned} directories:\n`;
+                data.cleaned_dirs.forEach(dir => {
+                    detailsMessage += `• ${dir}\n`;
+                });
+                showNotification('Cleanup Details', detailsMessage);
+            }
+        } else {
+            updateStatus(`Cleanup failed: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+        }
+    })
+    .catch(error => {
+        updateStatus(`Cleanup error: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+    });
 }
 
 /**
