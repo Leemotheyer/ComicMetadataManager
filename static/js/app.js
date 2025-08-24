@@ -257,8 +257,8 @@ function displayFilteredVolumes(volumes) {
                                     <a href="/volume/${volume.id}" class="btn btn-outline-primary btn-sm me-md-2 mb-2">
                                         <i class="fas fa-eye me-1"></i>View Details
                                     </a>
-                                    <button class="btn btn-outline-success btn-sm" onclick="processMetadataAndInject(${volume.id})">
-                                        <i class="fas fa-magic me-1"></i>Get Metadata & Inject
+                                    <button class="btn btn-primary btn-sm me-2" onclick="processMetadataAndInject(${volume.id})">
+                                        <i class="fas fa-magic me-1"></i>Get Metadata
                                     </button>
                                 </div>
                             </div>

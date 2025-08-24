@@ -40,6 +40,8 @@ class ComicMetadataInjector:
         Returns:
             Dictionary with injection results
         """
+        temp_dirs_created = []  # Track all temp directories created
+        
         try:
             # Map Kapowarr path to local path
             local_folder_path = self._map_kapowarr_to_local_path(kapowarr_folder_path)
@@ -69,7 +71,7 @@ class ComicMetadataInjector:
             # Process each comic file
             results = []
             for comic_file in comic_files:
-                result = self._process_comic_file(comic_file, xml_files, volume_id)
+                result = self._process_comic_file(comic_file, xml_files, volume_id, temp_dirs_created)
                 results.append(result)
             
             # Count successful injections
@@ -89,6 +91,11 @@ class ComicMetadataInjector:
                 'success': False,
                 'error': f'Metadata injection failed: {str(e)}'
             }
+        finally:
+            # Clean up any remaining temp directories
+            self._cleanup_temp_directories(temp_dirs_created)
+            # Also clean up any orphaned temp directories from this volume
+            self._cleanup_orphaned_temp_dirs(volume_id)
     
     def _map_kapowarr_to_local_path(self, kapowarr_folder_path: str) -> Optional[str]:
         """Map Kapowarr folder path to local file system path"""
@@ -122,7 +129,7 @@ class ComicMetadataInjector:
         return comic_files
     
     def _process_comic_file(self, comic_file: str, xml_files: List[str], 
-                           volume_id: int) -> Dict[str, any]:
+                           volume_id: int, temp_dirs_created: List[str]) -> Dict[str, any]:
         """Process a single comic file for metadata injection"""
         try:
             comic_filename = os.path.basename(comic_file)
@@ -148,6 +155,7 @@ class ComicMetadataInjector:
             temp_dir = f"temp_injection_{volume_id}_{int(os.path.getmtime(comic_file))}"
             os.makedirs(temp_dir, exist_ok=True)
             print(f"📁 Created temp directory: {temp_dir}")
+            temp_dirs_created.append(temp_dir) # Add to the list
             
             try:
                 # Extract comic file
@@ -204,12 +212,10 @@ class ComicMetadataInjector:
                     'message': 'Metadata injected successfully'
                 }
                 
-            finally:
-                # Clean up temporary directory
-                if os.path.exists(temp_dir):
-                    print(f"🧹 Cleaning up temp directory: {temp_dir}")
-                    shutil.rmtree(temp_dir)
-                    
+            except Exception as e:
+                print(f"❌ Error during processing of {comic_filename}: {e}")
+                raise
+                
         except Exception as e:
             print(f"❌ Error processing {comic_filename}: {e}")
             return {
@@ -322,6 +328,96 @@ class ComicMetadataInjector:
             elif "zip" in str(e).lower():
                 print(f"💡 Tip: Make sure zip tools are available for .cbz files")
             raise
+
+    def _cleanup_temp_directories(self, temp_dirs_created: List[str]):
+        """Clean up all temporary directories created by this instance."""
+        for temp_dir in temp_dirs_created:
+            if os.path.exists(temp_dir):
+                print(f"🧹 Cleaning up temp directory: {temp_dir}")
+                shutil.rmtree(temp_dir)
+                print(f"✅ {temp_dir} cleaned up.")
+            else:
+                print(f"⚠️ {temp_dir} not found, skipping cleanup.")
+
+    def _cleanup_orphaned_temp_dirs(self, volume_id: int):
+        """Clean up any orphaned temporary directories that might be left behind."""
+        print(f"🧹 Checking for orphaned temp directories for volume {volume_id}...")
+        
+        # Clean up injection temp directories
+        temp_dir_pattern = f"temp_injection_{volume_id}_"
+        injection_dirs = [d for d in os.listdir('.') if os.path.isdir(d) and d.startswith(temp_dir_pattern)]
+        
+        # Clean up XML temp directories
+        xml_dir_pattern = f"temp_xml_{volume_id}_"
+        xml_dirs = [d for d in os.listdir('.') if os.path.isdir(d) and d.startswith(xml_dir_pattern)]
+        
+        # Clean up all found directories
+        all_temp_dirs = injection_dirs + xml_dirs
+        
+        if all_temp_dirs:
+            print(f"🔍 Found {len(all_temp_dirs)} orphaned temp directories to clean up:")
+            for temp_dir in all_temp_dirs:
+                print(f"  📁 {temp_dir}")
+            
+            for temp_dir in all_temp_dirs:
+                try:
+                    print(f"🧹 Cleaning up orphaned temp directory: {temp_dir}")
+                    shutil.rmtree(temp_dir)
+                    print(f"✅ {temp_dir} cleaned up.")
+                except Exception as e:
+                    print(f"⚠️ Failed to clean up {temp_dir}: {e}")
+        else:
+            print(f"✅ No orphaned temp directories found for volume {volume_id}")
+        
+        # Also clean up any general temp directories that might be very old (older than 1 hour)
+        # This is a safety measure to prevent accumulation of temp dirs from failed operations
+        self._cleanup_old_temp_dirs()
+    
+    def _cleanup_old_temp_dirs(self):
+        """Clean up any temp directories that are older than 1 hour."""
+        import time
+        current_time = time.time()
+        one_hour_ago = current_time - 3600  # 1 hour in seconds
+        
+        # Look for any temp directories (injection or XML) that are older than 1 hour
+        temp_patterns = ['temp_injection_', 'temp_xml_']
+        old_temp_dirs = []
+        
+        for item in os.listdir('.'):
+            if os.path.isdir(item):
+                for pattern in temp_patterns:
+                    if item.startswith(pattern):
+                        try:
+                            # Try to get the creation time from the directory name
+                            # Format: temp_injection_123_1234567890 or temp_xml_123_1234567890
+                            parts = item.split('_')
+                            if len(parts) >= 3:
+                                timestamp_str = parts[-1]
+                                try:
+                                    timestamp = int(timestamp_str)
+                                    if timestamp < one_hour_ago:
+                                        old_temp_dirs.append(item)
+                                except ValueError:
+                                    # If we can't parse the timestamp, skip it
+                                    pass
+                        except Exception:
+                            # If we can't determine the age, skip it
+                            pass
+        
+        if old_temp_dirs:
+            print(f"🧹 Found {len(old_temp_dirs)} old temp directories (older than 1 hour):")
+            for temp_dir in old_temp_dirs:
+                print(f"  📁 {temp_dir}")
+            
+            for temp_dir in old_temp_dirs:
+                try:
+                    print(f"🧹 Cleaning up old temp directory: {temp_dir}")
+                    shutil.rmtree(temp_dir)
+                    print(f"✅ {temp_dir} cleaned up.")
+                except Exception as e:
+                    print(f"⚠️ Failed to clean up {temp_dir}: {e}")
+        else:
+            print(f"✅ No old temp directories found")
 
 
 # Standalone usage (for testing)
