@@ -1,6 +1,6 @@
 config/
 comics/
-temp*
+
 
 # Python
 __pycache__/

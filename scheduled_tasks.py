@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('scheduled_tasks.log'),
+        logging.FileHandler('config/scheduled_tasks.log'),
         logging.StreamHandler()
     ]
 )
@@ -422,18 +422,20 @@ class ScheduledTaskManager:
         try:
             cleaned_count = 0
             
-            # Look for old log files
-            log_files = glob.glob("*.log.*")
-            for log_file in log_files:
-                try:
-                    # Check if log file is old enough to delete
-                    file_age = time.time() - os.path.getctime(log_file)
-                    if file_age > (self.task_config['log_retention_days'] * 86400):
-                        os.remove(log_file)
-                        cleaned_count += 1
-                        logger.debug(f"Cleaned up old log file: {log_file}")
-                except Exception as e:
-                    logger.error(f"Failed to clean up log file {log_file}: {e}")
+            # Look for old log files in current directory and config directory
+            log_patterns = ["*.log.*", "config/*.log.*"]
+            for pattern in log_patterns:
+                log_files = glob.glob(pattern)
+                for log_file in log_files:
+                    try:
+                        # Check if log file is old enough to delete
+                        file_age = time.time() - os.path.getctime(log_file)
+                        if file_age > (self.task_config['log_retention_days'] * 86400):
+                            os.remove(log_file)
+                            cleaned_count += 1
+                            logger.debug(f"Cleaned up old log file: {log_file}")
+                    except Exception as e:
+                        logger.error(f"Failed to clean up log file {log_file}: {e}")
             
             return cleaned_count
             
@@ -484,21 +486,27 @@ class ScheduledTaskManager:
     def _rotate_log_file(self, log_filename: str):
         """Rotate a log file"""
         try:
-            if os.path.exists(log_filename):
+            # Handle both relative and absolute paths
+            if log_filename == 'scheduled_tasks.log':
+                log_path = 'config/scheduled_tasks.log'
+            else:
+                log_path = log_filename
+            
+            if os.path.exists(log_path):
                 # Create rotated filename with timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                rotated_filename = f"{log_filename}.{timestamp}"
+                rotated_filename = f"{log_path}.{timestamp}"
                 
                 # Rename current log file
-                os.rename(log_filename, rotated_filename)
+                os.rename(log_path, rotated_filename)
                 
                 # Create new empty log file
-                open(log_filename, 'a').close()
+                open(log_path, 'a').close()
                 
-                logger.info(f"Rotated log file: {log_filename} -> {rotated_filename}")
+                logger.info(f"Rotated log file: {log_path} -> {rotated_filename}")
                 
         except Exception as e:
-            logger.error(f"Error rotating log file {log_filename}: {e}")
+            logger.error(f"Error rotating log file {log_path}: {e}")
     
     def _compress_old_logs(self):
         """Compress old rotated log files"""
