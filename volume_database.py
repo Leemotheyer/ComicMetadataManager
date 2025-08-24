@@ -54,6 +54,23 @@ class VolumeDatabase:
                     )
                 ''')
                 
+                # Create issue_metadata_status table for tracking individual issue metadata status
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS issue_metadata_status (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        volume_id INTEGER NOT NULL,
+                        issue_comicvine_id TEXT NOT NULL,
+                        issue_number TEXT,
+                        metadata_processed BOOLEAN DEFAULT FALSE,
+                        metadata_injected BOOLEAN DEFAULT FALSE,
+                        last_processed TIMESTAMP,
+                        last_injected TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (volume_id) REFERENCES volumes (id),
+                        UNIQUE(volume_id, issue_comicvine_id)
+                    )
+                ''')
+                
                 # Create cache_metadata table for tracking cache validity
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -61,6 +78,17 @@ class VolumeDatabase:
                         value TEXT NOT NULL,
                         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
+                ''')
+                
+                # Create index for faster lookups
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_issue_metadata_volume_id 
+                    ON issue_metadata_status(volume_id)
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_issue_metadata_comicvine_id 
+                    ON issue_metadata_status(issue_comicvine_id)
                 ''')
                 
                 # Migrate existing database schema if needed
@@ -616,6 +644,7 @@ class VolumeDatabase:
                 cursor.execute("DROP TABLE IF EXISTS volumes")
                 cursor.execute("DROP TABLE IF EXISTS volume_details")
                 cursor.execute("DROP TABLE IF EXISTS cache_metadata")
+                cursor.execute("DROP TABLE IF EXISTS issue_metadata_status")
                 
                 # Recreate tables with new schema
                 cursor.execute('''
@@ -642,11 +671,38 @@ class VolumeDatabase:
                 ''')
                 
                 cursor.execute('''
+                    CREATE TABLE issue_metadata_status (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        volume_id INTEGER NOT NULL,
+                        issue_comicvine_id TEXT NOT NULL,
+                        issue_number TEXT,
+                        metadata_processed BOOLEAN DEFAULT FALSE,
+                        metadata_injected BOOLEAN DEFAULT FALSE,
+                        last_processed TIMESTAMP,
+                        last_injected TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (volume_id) REFERENCES volumes (id),
+                        UNIQUE(volume_id, issue_comicvine_id)
+                    )
+                ''')
+                
+                cursor.execute('''
                     CREATE TABLE cache_metadata (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL,
                         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
+                ''')
+                
+                # Create indexes
+                cursor.execute('''
+                    CREATE INDEX idx_issue_metadata_volume_id 
+                    ON issue_metadata_status(volume_id)
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX idx_issue_metadata_comicvine_id 
+                    ON issue_metadata_status(issue_comicvine_id)
                 ''')
                 
                 # Restore existing data
@@ -676,11 +732,262 @@ class VolumeDatabase:
             print(f"❌ Error during schema migration: {e}")
             return False
     
-    def get_volumes_needing_metadata(self) -> List[Dict]:
-        """Get volumes that need metadata processing"""
+    def update_issue_metadata_status(self, volume_id: int, issue_comicvine_id: str, 
+                                   issue_number: str = None, **kwargs) -> bool:
+        """Update metadata status for a specific issue
+        
+        Args:
+            volume_id: ID of the volume
+            issue_comicvine_id: ComicVine ID of the issue
+            issue_number: Issue number (optional)
+            **kwargs: Fields to update (metadata_processed, metadata_injected, etc.)
+            
+        Returns:
+            True if successful, False otherwise
+        """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # Check if issue exists, create if not
+                cursor.execute('''
+                    SELECT id FROM issue_metadata_status 
+                    WHERE volume_id = ? AND issue_comicvine_id = ?
+                ''', (volume_id, issue_comicvine_id))
+                
+                if cursor.fetchone():
+                    # Update existing record
+                    fields = []
+                    values = []
+                    
+                    for key, value in kwargs.items():
+                        if key in ['metadata_processed', 'metadata_injected']:
+                            fields.append(f"{key} = ?")
+                            if key == 'metadata_processed':
+                                fields.append("last_processed = ?")
+                                values.extend([value, datetime.now()])
+                            elif key == 'metadata_injected':
+                                fields.append("last_injected = ?")
+                                values.extend([value, datetime.now()])
+                            else:
+                                values.append(value)
+                    
+                    if fields:
+                        values.extend([volume_id, issue_comicvine_id])
+                        query = f"UPDATE issue_metadata_status SET {', '.join(fields)} WHERE volume_id = ? AND issue_comicvine_id = ?"
+                        cursor.execute(query, values)
+                else:
+                    # Create new record
+                    metadata_processed = kwargs.get('metadata_processed', False)
+                    metadata_injected = kwargs.get('metadata_injected', False)
+                    
+                    cursor.execute('''
+                        INSERT INTO issue_metadata_status 
+                        (volume_id, issue_comicvine_id, issue_number, metadata_processed, metadata_injected, 
+                         last_processed, last_injected)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        volume_id, issue_comicvine_id, issue_number, metadata_processed, metadata_injected,
+                        datetime.now() if metadata_processed else None,
+                        datetime.now() if metadata_injected else None
+                    ))
+                
+                conn.commit()
+                return True
+                
+        except Exception as e:
+            print(f"❌ Error updating issue metadata status: {e}")
+            return False
+    
+    def get_issue_metadata_status(self, volume_id: int, issue_comicvine_id: str) -> Optional[Dict]:
+        """Get metadata status for a specific issue
+        
+        Args:
+            volume_id: ID of the volume
+            issue_comicvine_id: ComicVine ID of the issue
+            
+        Returns:
+            Issue metadata status dictionary or None if not found
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT volume_id, issue_comicvine_id, issue_number, metadata_processed, 
+                           metadata_injected, last_processed, last_injected, created_at
+                    FROM issue_metadata_status 
+                    WHERE volume_id = ? AND issue_comicvine_id = ?
+                ''', (volume_id, issue_comicvine_id))
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'volume_id': row[0],
+                        'issue_comicvine_id': row[1],
+                        'issue_number': row[2],
+                        'metadata_processed': bool(row[3]),
+                        'metadata_injected': bool(row[4]),
+                        'last_processed': row[5],
+                        'last_injected': row[6],
+                        'created_at': row[7]
+                    }
+                
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error getting issue metadata status: {e}")
+            return None
+    
+    def get_issues_needing_metadata(self, volume_id: int) -> List[Dict]:
+        """Get issues in a volume that need metadata processing
+        
+        Args:
+            volume_id: ID of the volume
+            
+        Returns:
+            List of issues that need metadata processing
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get volume details to see all issues
+                volume_details = self.get_volume_details(volume_id)
+                if not volume_details or 'issues' not in volume_details:
+                    return []
+                
+                # Get existing metadata status for all issues
+                cursor.execute('''
+                    SELECT issue_comicvine_id, metadata_processed, metadata_injected
+                    FROM issue_metadata_status 
+                    WHERE volume_id = ?
+                ''', (volume_id,))
+                
+                existing_status = {row[0]: {'processed': bool(row[1]), 'injected': bool(row[2])} 
+                                 for row in cursor.fetchall()}
+                
+                # Find issues that need processing
+                issues_needing_metadata = []
+                for issue in volume_details['issues']:
+                    comicvine_id = issue.get('comicvine_id')
+                    if not comicvine_id:
+                        continue
+                    
+                    # Check if issue has files
+                    if not issue.get('files') or len(issue['files']) == 0:
+                        continue
+                    
+                    # Check if issue needs metadata processing
+                    issue_status = existing_status.get(comicvine_id, {})
+                    if not issue_status.get('processed', False):
+                        issues_needing_metadata.append({
+                            'issue': issue,
+                            'comicvine_id': comicvine_id,
+                            'issue_number': issue.get('issue_number', 'Unknown'),
+                            'needs_processing': True,
+                            'needs_injection': not issue_status.get('injected', False)
+                        })
+                
+                return issues_needing_metadata
+                
+        except Exception as e:
+            print(f"❌ Error getting issues needing metadata: {e}")
+            return []
+    
+    def detect_new_issues_in_volume(self, volume_id: int) -> List[Dict]:
+        """Detect new issues that have been added to an existing volume
+        
+        Args:
+            volume_id: ID of the volume
+            
+        Returns:
+            List of newly detected issues
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get current volume details
+                volume_details = self.get_volume_details(volume_id)
+                if not volume_details or 'issues' not in volume_details:
+                    return []
+                
+                # Get existing metadata status for all issues
+                cursor.execute('''
+                    SELECT issue_comicvine_id FROM issue_metadata_status 
+                    WHERE volume_id = ?
+                ''', (volume_id,))
+                
+                existing_issue_ids = {row[0] for row in cursor.fetchall()}
+                
+                # Find new issues
+                new_issues = []
+                for issue in volume_details['issues']:
+                    comicvine_id = issue.get('comicvine_id')
+                    if not comicvine_id:
+                        continue
+                    
+                    # Check if issue has files
+                    if not issue.get('files') or len(issue['files']) == 0:
+                        continue
+                    
+                    # Check if this is a new issue
+                    if comicvine_id not in existing_issue_ids:
+                        new_issues.append({
+                            'issue': issue,
+                            'comicvine_id': comicvine_id,
+                            'issue_number': issue.get('issue_number', 'Unknown'),
+                            'is_new': True
+                        })
+                
+                return new_issues
+                
+        except Exception as e:
+            print(f"❌ Error detecting new issues: {e}")
+            return []
+    
+    def get_volumes_with_new_issues(self) -> List[int]:
+        """Get volume IDs that have new issues that need processing
+        
+        Returns:
+            List of volume IDs with new issues
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get all volumes
+                cursor.execute('SELECT id FROM volumes')
+                volume_ids = [row[0] for row in cursor.fetchall()]
+                
+                volumes_with_new_issues = []
+                for volume_id in volume_ids:
+                    new_issues = self.detect_new_issues_in_volume(volume_id)
+                    if new_issues:
+                        volumes_with_new_issues.append(volume_id)
+                
+                return volumes_with_new_issues
+                
+        except Exception as e:
+            print(f"❌ Error getting volumes with new issues: {e}")
+            return []
+    
+    def get_volumes_with_new_issues_ids(self) -> List[int]:
+        """Get just the IDs of volumes that have new issues
+        
+        Returns:
+            List of volume IDs with new issues
+        """
+        return self.get_volumes_with_new_issues()
+    
+    def get_volumes_needing_metadata(self) -> List[Dict]:
+        """Get volumes that need metadata processing (including new issues)"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get volumes that don't have metadata processed
                 cursor.execute('''
                     SELECT id, volume_folder, status, last_updated, total_issues, issues_with_files, 
                            metadata_processed, xml_generated, metadata_injected
@@ -706,6 +1013,37 @@ class VolumeDatabase:
                     }
                     volumes.append(volume)
                 
+                # Also check for volumes with new issues
+                volumes_with_new_issues = self.get_volumes_with_new_issues()
+                for volume_id in volumes_with_new_issues:
+                    # Check if this volume is already in the list
+                    if not any(v['id'] == volume_id for v in volumes):
+                        # Get volume details and add to list
+                        volume_details = self.get_volume_details(volume_id)
+                        if volume_details:
+                            cursor.execute('''
+                                SELECT volume_folder, status, last_updated, total_issues, issues_with_files, 
+                                       metadata_processed, xml_generated, metadata_injected
+                                FROM volumes 
+                                WHERE id = ?
+                            ''', (volume_id,))
+                            
+                            row = cursor.fetchone()
+                            if row:
+                                volume = {
+                                    'id': volume_id,
+                                    'volume_folder': row[0],
+                                    'status': row[1],
+                                    'last_updated': row[2],
+                                    'total_issues': row[3],
+                                    'issues_with_files': row[4],
+                                    'metadata_processed': bool(row[5]),
+                                    'xml_generated': bool(row[6]),
+                                    'metadata_injected': bool(row[7]),
+                                    'has_new_issues': True
+                                }
+                                volumes.append(volume)
+                
                 return volumes
                 
         except Exception as e:
@@ -715,17 +1053,8 @@ class VolumeDatabase:
     def get_volumes_needing_metadata_ids(self) -> List[int]:
         """Get list of volume IDs that need metadata processing"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT id FROM volumes 
-                    WHERE metadata_processed = FALSE AND issues_with_files > 0
-                    ORDER BY last_updated ASC
-                ''')
-                
-                rows = cursor.fetchall()
-                return [row[0] for row in rows]
-                
+            volumes = self.get_volumes_needing_metadata()
+            return [v['id'] for v in volumes]
         except Exception as e:
             print(f"Error getting volume IDs needing metadata: {e}")
             return []

@@ -13,6 +13,7 @@ import os
 import shutil
 import glob
 import json
+import sqlite3
 
 # Configure logging
 logging.basicConfig(
@@ -194,6 +195,15 @@ class ScheduledTaskManager:
             else:
                 logger.info("No new volumes detected")
             
+            # Check for new issues in existing volumes
+            volumes_with_new_issues = self._check_for_new_issues_in_existing_volumes()
+            if volumes_with_new_issues:
+                logger.info(f"Found {len(volumes_with_new_issues)} volumes with new issues")
+                
+                # Auto-process metadata for new issues if enabled
+                if self.task_config['auto_metadata_for_new_volumes']:
+                    self._auto_process_new_issues(volumes_with_new_issues)
+            
             # Update last run time
             self.stats['last_run'] = datetime.now()
             self.stats['next_run'] = datetime.now() + timedelta(seconds=self.task_config['volume_update_interval'])
@@ -222,11 +232,23 @@ class ScheduledTaskManager:
             
             # Process metadata for each volume (limit concurrent tasks)
             processed_count = 0
-            for volume_id in volumes_needing_metadata[:self.task_config['max_concurrent_metadata_tasks']]:
+            for volume in volumes_needing_metadata[:self.task_config['max_concurrent_metadata_tasks']]:
                 try:
-                    if self._process_volume_metadata(volume_id):
-                        processed_count += 1
-                        self.stats['metadata_processed'] += 1
+                    volume_id = volume['id']
+                    logger.info(f"Processing metadata for volume {volume_id}")
+                    
+                    # Check if this volume has new issues that need processing
+                    if volume.get('has_new_issues', False):
+                        logger.info(f"Volume {volume_id} has new issues, processing only those")
+                        if self._process_new_issues_in_volume(volume_id):
+                            processed_count += 1
+                            self.stats['metadata_processed'] += 1
+                    else:
+                        # Process all issues that need metadata
+                        if self._process_volume_metadata(volume_id):
+                            processed_count += 1
+                            self.stats['metadata_processed'] += 1
+                            
                 except Exception as e:
                     logger.error(f"Failed to process metadata for volume {volume_id}: {e}")
             
@@ -330,7 +352,7 @@ class ScheduledTaskManager:
             logger.error(f"Failed to get Kapowarr total volumes: {e}")
             return None
     
-    def _get_volumes_needing_metadata(self) -> List[int]:
+    def _get_volumes_needing_metadata(self) -> List[Dict]:
         """Get list of volume IDs that need metadata processing"""
         try:
             # Query database for volumes without metadata
@@ -343,7 +365,7 @@ class ScheduledTaskManager:
                 
                 for volume in all_volumes:
                     if not volume.get('metadata_processed', False):
-                        volumes_needing_metadata.append(volume['id'])
+                        volumes_needing_metadata.append(volume)
                 
                 return volumes_needing_metadata
                 
@@ -356,7 +378,8 @@ class ScheduledTaskManager:
         try:
             # Use the existing volume manager metadata processing
             if hasattr(self.volume_manager, 'process_volume_metadata'):
-                metadata = self.volume_manager.process_volume_metadata(volume_id)
+                # Scheduled tasks should NOT use manual override - only process what needs processing
+                metadata = self.volume_manager.process_volume_metadata(volume_id, manual_override=False)
                 return metadata is not None and len(metadata) > 0
             else:
                 logger.error("Volume manager does not have process_volume_metadata method")
@@ -364,6 +387,59 @@ class ScheduledTaskManager:
                 
         except Exception as e:
             logger.error(f"Failed to process metadata for volume {volume_id}: {e}")
+            return False
+    
+    def _process_new_issues_in_volume(self, volume_id: int) -> bool:
+        """Process metadata only for new issues in a volume"""
+        try:
+            # Get new issues that need metadata processing
+            new_issues = self.volume_db.detect_new_issues_in_volume(volume_id)
+            if not new_issues:
+                logger.info(f"No new issues found in volume {volume_id}")
+                return True
+            
+            logger.info(f"Processing metadata for {len(new_issues)} new issues in volume {volume_id}")
+            
+            # Process each new issue
+            processed_count = 0
+            for issue_info in new_issues:
+                try:
+                    issue = issue_info['issue']
+                    comicvine_id = issue_info['comicvine_id']
+                    issue_number = issue_info['issue_number']
+                    
+                    logger.info(f"Processing new issue {issue_number} (ComicVine ID: {comicvine_id})")
+                    
+                    # Get metadata from ComicVine
+                    if hasattr(self.volume_manager, 'metadata_fetcher'):
+                        metadata = self.volume_manager.metadata_fetcher.get_comicvine_metadata(comicvine_id)
+                        if metadata:
+                            # Update issue metadata status
+                            self.volume_db.update_issue_metadata_status(
+                                volume_id,
+                                comicvine_id,
+                                issue_number,
+                                metadata_processed=True
+                            )
+                            processed_count += 1
+                            logger.info(f"✅ Successfully processed metadata for new issue {issue_number}")
+                        else:
+                            logger.error(f"❌ Failed to get metadata for new issue {issue_number}")
+                    else:
+                        logger.error("Volume manager does not have metadata_fetcher")
+                        return False
+                    
+                    # Rate limiting
+                    time.sleep(1.0)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process new issue {issue_number}: {e}")
+            
+            logger.info(f"Processed metadata for {processed_count}/{len(new_issues)} new issues in volume {volume_id}")
+            return processed_count > 0
+            
+        except Exception as e:
+            logger.error(f"Failed to process new issues in volume {volume_id}: {e}")
             return False
     
     def _auto_process_new_volumes(self, volumes: List[Dict]):
@@ -374,6 +450,72 @@ class ScheduledTaskManager:
             logger.info(f"Auto-processing metadata for {len(volumes)} volumes")
         except Exception as e:
             logger.error(f"Failed to auto-process new volumes: {e}")
+    
+    def _auto_process_new_issues(self, volumes: List[Dict]):
+        """Automatically process metadata for new issues in existing volumes"""
+        try:
+            # This would identify new issues and process their metadata
+            # For now, just logging
+            logger.info(f"Auto-processing metadata for {len(volumes)} volumes with new issues")
+        except Exception as e:
+            logger.error(f"Failed to auto-process new issues: {e}")
+    
+    def _check_for_new_issues_in_existing_volumes(self) -> List[Dict]:
+        """Check for new issues in existing volumes that need metadata processing"""
+        try:
+            # Query database for volumes that have new issues
+            if hasattr(self.volume_db, 'get_volumes_with_new_issues_ids'):
+                volume_ids = self.volume_db.get_volumes_with_new_issues_ids()
+                volumes_with_new_issues = []
+                
+                for volume_id in volume_ids:
+                    volume_details = self.volume_db.get_volume_details(volume_id)
+                    if volume_details:
+                        # Get basic volume info
+                        cursor = self.volume_db.db_path
+                        with sqlite3.connect(cursor) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                SELECT volume_folder, status, last_updated, total_issues, issues_with_files, 
+                                       metadata_processed, xml_generated, metadata_injected
+                                FROM volumes 
+                                WHERE id = ?
+                            ''', (volume_id,))
+                            
+                            row = cursor.fetchone()
+                            if row:
+                                volume = {
+                                    'id': volume_id,
+                                    'volume_folder': row[0],
+                                    'status': row[1],
+                                    'last_updated': row[2],
+                                    'total_issues': row[3],
+                                    'issues_with_files': row[4],
+                                    'metadata_processed': bool(row[5]),
+                                    'xml_generated': bool(row[6]),
+                                    'metadata_injected': bool(row[7]),
+                                    'has_new_issues': True
+                                }
+                                volumes_with_new_issues.append(volume)
+                
+                return volumes_with_new_issues
+            else:
+                # Fallback: get all volumes and check for new issues
+                all_volumes = self.volume_db.get_volumes()
+                volumes_with_new_issues = []
+                
+                for volume in all_volumes:
+                    # Check if the volume has new issues
+                    new_issues = self.volume_db.detect_new_issues_in_volume(volume['id'])
+                    if new_issues:
+                        volume['has_new_issues'] = True
+                        volumes_with_new_issues.append(volume)
+                
+                return volumes_with_new_issues
+                
+        except Exception as e:
+            logger.error(f"Failed to check for new issues in existing volumes: {e}")
+            return []
     
     def _cleanup_temp_directories(self) -> int:
         """Clean up temporary directories"""

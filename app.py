@@ -182,9 +182,16 @@ class VolumeManager:
             print(f"Error getting volume details: {e}")
             return None
     
-    def process_volume_metadata(self, volume_id):
-        """Process metadata for a volume and return results"""
+    def process_volume_metadata(self, volume_id, manual_override=False):
+        """Process metadata for a volume and return results
+        
+        Args:
+            volume_id: ID of the volume to process
+            manual_override: If True, reprocess issues even if they already have metadata
+        """
         try:
+            print(f"🔄 Starting metadata processing for volume {volume_id} (manual_override={manual_override})")
+            
             # First get volume details to see which issues have files
             volume_details = self.get_volume_details(volume_id)
             if not volume_details or 'issues' not in volume_details:
@@ -208,32 +215,101 @@ class VolumeManager:
                 print(f"No issues with files found in volume {volume_id}")
                 return {}
             
-            # Now process metadata only for issues with files by calling ComicVine API directly
-            print(f"Processing metadata for {len(issues_with_files)} issues with files in volume {volume_id}")
+            print(f"Found {len(issues_with_files)} issues with files in volume {volume_id}")
             
-            metadata_results = {}
+            # Check which issues already have metadata processed
+            issues_needing_metadata = []
+            already_processed_count = 0
+            
             for issue in issues_with_files:
                 comicvine_id = issue.get('comicvine_id')
                 if comicvine_id:
-                    print(f"Processing issue {issue.get('issue_number', 'Unknown')} (ComicVine ID: {comicvine_id})")
-                    
-                    # Get ComicVine metadata directly
-                    metadata = self.metadata_fetcher.get_comicvine_metadata(comicvine_id)
-                    if metadata:
-                        metadata_results[comicvine_id] = {
-                            'kapowarr_issue': issue,
-                            'comicvine_metadata': metadata
-                        }
-                    
-                    # Rate limiting for ComicVine API
-                    time.sleep(1.0)
+                    # Check if this issue already has metadata processed
+                    issue_status = volume_db.get_issue_metadata_status(volume_id, comicvine_id)
+                    if issue_status and issue_status.get('metadata_processed', False):
+                        if manual_override:
+                            # Manual override: include this issue for reprocessing
+                            issues_needing_metadata.append(issue)
+                            print(f"🔄 Manual override: including already processed issue {issue.get('issue_number', 'Unknown')} for reprocessing")
+                        else:
+                            # Scheduled task: skip already processed issues
+                            already_processed_count += 1
+                            print(f"Issue {issue.get('issue_number', 'Unknown')} already has metadata processed, skipping")
+                            continue
+                    else:
+                        issues_needing_metadata.append(issue)
+                        print(f"Issue {issue.get('issue_number', 'Unknown')} needs metadata processing")
                 else:
                     print(f"Issue {issue.get('issue_number', 'Unknown')} has no ComicVine ID")
             
-            print(f"Successfully processed metadata for {len(metadata_results)} issues with files")
+            if already_processed_count > 0 and not manual_override:
+                print(f"Skipping {already_processed_count} already processed issues from volume {volume_id}")
             
-            # Update database status
-            volume_db.update_volume_status(volume_id, metadata_processed=True)
+            if not issues_needing_metadata:
+                if manual_override:
+                    print(f"🔄 Manual override: all issues in volume {volume_id} already have metadata, but reprocessing anyway...")
+                    # For manual override, process all issues even if they already have metadata
+                    issues_needing_metadata = issues_with_files.copy()
+                else:
+                    print(f"All issues in volume {volume_id} already have metadata processed")
+                    # Update volume status to indicate all issues are processed
+                    volume_db.update_volume_status(volume_id, metadata_processed=True)
+                    return {}
+            
+            # Now process metadata for issues that need it
+            if manual_override:
+                print(f"🔄 Manual override: processing metadata for {len(issues_needing_metadata)} issues in volume {volume_id}")
+                if already_processed_count > 0:
+                    print(f"🔄 Note: {already_processed_count} issues already have metadata but will be reprocessed due to manual override")
+            else:
+                print(f"Processing metadata for {len(issues_needing_metadata)} issues that need it in volume {volume_id}")
+            
+            metadata_results = {}
+            for issue in issues_needing_metadata:
+                comicvine_id = issue.get('comicvine_id')
+                issue_number = issue.get('issue_number', 'Unknown')
+                
+                print(f"Processing issue {issue_number} (ComicVine ID: {comicvine_id})")
+                
+                # Get ComicVine metadata directly
+                metadata = self.metadata_fetcher.get_comicvine_metadata(comicvine_id)
+                if metadata:
+                    metadata_results[comicvine_id] = {
+                        'kapowarr_issue': issue,
+                        'comicvine_metadata': metadata
+                    }
+                    
+                    # Update issue metadata status
+                    volume_db.update_issue_metadata_status(
+                        volume_id, 
+                        comicvine_id, 
+                        issue_number,
+                        metadata_processed=True
+                    )
+                    
+                    print(f"✅ Successfully processed metadata for issue {issue_number}")
+                else:
+                    print(f"❌ Failed to get metadata for issue {issue_number}")
+                
+                # Rate limiting for ComicVine API
+                time.sleep(1.0)
+            
+            print(f"Successfully processed metadata for {len(metadata_results)} issues")
+            
+            # Check if all issues in the volume now have metadata
+            all_issues_processed = True
+            for issue in issues_with_files:
+                comicvine_id = issue.get('comicvine_id')
+                if comicvine_id:
+                    issue_status = volume_db.get_issue_metadata_status(volume_id, comicvine_id)
+                    if not issue_status or not issue_status.get('metadata_processed', False):
+                        all_issues_processed = False
+                        break
+            
+            # Update volume status if all issues are processed
+            if all_issues_processed:
+                volume_db.update_volume_status(volume_id, metadata_processed=True)
+                print(f"✅ All issues in volume {volume_id} now have metadata processed")
             
             return metadata_results
             
@@ -305,7 +381,8 @@ def process_volume_metadata(volume_id):
         
         def metadata_task():
             try:
-                metadata = volume_manager.process_volume_metadata(volume_id)
+                # Manual button press: always allow processing (manual_override=True)
+                metadata = volume_manager.process_volume_metadata(volume_id, manual_override=True)
                 
                 # Get total issues from volume details for comparison
                 volume_details = volume_manager.get_volume_details(volume_id)
@@ -381,6 +458,12 @@ def process_issue_metadata(volume_id, issue_index):
                         'error': f'Issue {issue_index} has no ComicVine ID'
                     }
                     return
+                
+                # For manual button presses, always allow processing regardless of current status
+                # This ensures users can manually reprocess any issue when needed
+                issue_status = volume_db.get_issue_metadata_status(volume_id, comicvine_id)
+                if issue_status and issue_status.get('metadata_processed', False):
+                    print(f"🔄 Manual processing requested for issue {issue_index} (already has metadata), reprocessing...")
                 
                 # Fetch metadata from ComicVine
                 metadata = volume_manager.metadata_fetcher.get_comicvine_metadata(comicvine_id)
@@ -551,6 +634,34 @@ def process_issue_metadata(volume_id, issue_index):
                         'message': f'Successfully processed and injected metadata for issue {issue_index} ({len(results)} files)'
                     }
                     
+                    # Update issue metadata status to indicate processing and injection are complete
+                    volume_db.update_issue_metadata_status(
+                        volume_id,
+                        comicvine_id,
+                        target_issue.get('issue_number', 'Unknown'),
+                        metadata_processed=True,
+                        metadata_injected=True
+                    )
+                    
+                    print(f"✅ Successfully processed and injected metadata for issue {issue_index}")
+                    
+                    # Check if all issues in the volume now have metadata processed
+                    volume_details = volume_manager.get_volume_details(volume_id)
+                    if volume_details and 'issues' in volume_details:
+                        all_issues_processed = True
+                        for issue in volume_details['issues']:
+                            issue_comicvine_id = issue.get('comicvine_id')
+                            if issue_comicvine_id:
+                                issue_status = volume_db.get_issue_metadata_status(volume_id, issue_comicvine_id)
+                                if not issue_status or not issue_status.get('metadata_processed', False):
+                                    all_issues_processed = False
+                                    break
+                        
+                        # Update volume status if all issues are processed
+                        if all_issues_processed:
+                            volume_db.update_volume_status(volume_id, metadata_processed=True, metadata_injected=True)
+                            print(f"✅ All issues in volume {volume_id} now have metadata processed and injected")
+                    
                     # Clean up temporary directory and any other temp dirs created during processing
                     try:
                         import shutil
@@ -624,8 +735,8 @@ def get_task_status(task_id):
 def prepare_xml_for_injection(volume_id):
     """Prepare XML metadata for comic file injection"""
     try:
-        # Get metadata first
-        metadata = volume_manager.process_volume_metadata(volume_id)
+        # Get metadata first - manual button press should always work
+        metadata = volume_manager.process_volume_metadata(volume_id, manual_override=True)
         if not metadata:
             return jsonify({'success': False, 'error': 'No metadata available for this volume'})
         
@@ -1121,6 +1232,159 @@ def start_scheduled_tasks():
         print("✅ Scheduled task system started successfully")
     except Exception as e:
         print(f"❌ Failed to start scheduled task system: {e}")
+
+@app.route('/api/volume/<int:volume_id>/issue/<int:issue_index>/reset-status', methods=['POST'])
+def reset_issue_metadata_status(volume_id, issue_index):
+    """Reset metadata status for a specific issue to allow reprocessing"""
+    try:
+        # Get volume details to find the specific issue
+        volume_details = volume_manager.get_volume_details(volume_id)
+        if not volume_details or 'issues' not in volume_details:
+            return jsonify({'success': False, 'error': 'Volume or issues not found'})
+        
+        # Check if issue index is valid
+        if issue_index < 0 or issue_index >= len(volume_details['issues']):
+            return jsonify({
+                'success': False, 
+                'error': f'Issue index {issue_index} is out of range. Volume has {len(volume_details["issues"])} issues.'
+            })
+        
+        # Get the specific issue by index
+        target_issue = volume_details['issues'][issue_index]
+        comicvine_id = target_issue.get('comicvine_id')
+        
+        if not comicvine_id:
+            return jsonify({'success': False, 'error': f'Issue {issue_index} has no ComicVine ID'})
+        
+        # Reset the issue metadata status
+        if volume_db.update_issue_metadata_status(
+            volume_id, 
+            comicvine_id, 
+            target_issue.get('issue_number', 'Unknown'),
+            metadata_processed=False,
+            metadata_injected=False
+        ):
+            return jsonify({
+                'success': True,
+                'message': f'Successfully reset metadata status for issue {issue_index}',
+                'issue_number': target_issue.get('issue_number', 'Unknown'),
+                'comicvine_id': comicvine_id
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Failed to reset issue metadata status'})
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/volume/<int:volume_id>/reset-all-issues', methods=['POST'])
+def reset_all_issues_metadata_status(volume_id):
+    """Reset metadata status for all issues in a volume to allow reprocessing"""
+    try:
+        # Get volume details
+        volume_details = volume_manager.get_volume_details(volume_id)
+        if not volume_details or 'issues' not in volume_details:
+            return jsonify({'success': False, 'error': 'Volume or issues not found'})
+        
+        # Reset status for all issues
+        reset_count = 0
+        for issue in volume_details['issues']:
+            comicvine_id = issue.get('comicvine_id')
+            if comicvine_id:
+                if volume_db.update_issue_metadata_status(
+                    volume_id,
+                    comicvine_id,
+                    issue.get('issue_number', 'Unknown'),
+                    metadata_processed=False,
+                    metadata_injected=False
+                ):
+                    reset_count += 1
+        
+        # Also reset volume status
+        volume_db.update_volume_status(
+            volume_id, 
+            metadata_processed=False,
+            xml_generated=False,
+            metadata_injected=False
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully reset metadata status for {reset_count} issues in volume {volume_id}',
+            'issues_reset': reset_count,
+            'volume_id': volume_id
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/volume/<int:volume_id>/issue-status')
+def get_volume_issue_status(volume_id):
+    """Get detailed metadata status for all issues in a volume"""
+    try:
+        # Get volume details
+        volume_details = volume_manager.get_volume_details(volume_id)
+        if not volume_details or 'issues' not in volume_details:
+            return jsonify({'success': False, 'error': 'Volume or issues not found'})
+        
+        # Get status for all issues
+        issues_status = []
+        for issue in volume_details['issues']:
+            comicvine_id = issue.get('comicvine_id')
+            if comicvine_id:
+                issue_status = volume_db.get_issue_metadata_status(volume_id, comicvine_id)
+                if issue_status:
+                    issues_status.append({
+                        'issue_index': volume_details['issues'].index(issue),
+                        'issue_number': issue.get('issue_number', 'Unknown'),
+                        'comicvine_id': comicvine_id,
+                        'has_files': bool(issue.get('files') and len(issue['files']) > 0),
+                        'metadata_processed': issue_status.get('metadata_processed', False),
+                        'metadata_injected': issue_status.get('metadata_injected', False),
+                        'last_processed': issue_status.get('last_processed'),
+                        'last_injected': issue_status.get('last_injected'),
+                        'created_at': issue_status.get('created_at')
+                    })
+                else:
+                    # Issue not in database yet
+                    issues_status.append({
+                        'issue_index': volume_details['issues'].index(issue),
+                        'issue_number': issue.get('issue_number', 'Unknown'),
+                        'comicvine_id': comicvine_id,
+                        'has_files': bool(issue.get('files') and len(issue['files']) > 0),
+                        'metadata_processed': False,
+                        'metadata_injected': False,
+                        'last_processed': None,
+                        'last_injected': None,
+                        'created_at': None
+                    })
+        
+        # Get volume status
+        volume_info = volume_db.get_volumes(limit=None)
+        volume_status = None
+        for vol in volume_info:
+            if vol['id'] == volume_id:
+                volume_status = vol
+                break
+        
+        return jsonify({
+            'success': True,
+            'volume_id': volume_id,
+            'volume_status': volume_status,
+            'total_issues': len(volume_details['issues']),
+            'issues_with_files': sum(1 for issue in volume_details['issues'] if issue.get('files')),
+            'issues_status': issues_status,
+            'summary': {
+                'total_issues': len(issues_status),
+                'issues_with_files': sum(1 for issue in issues_status if issue['has_files']),
+                'metadata_processed': sum(1 for issue in issues_status if issue['metadata_processed']),
+                'metadata_injected': sum(1 for issue in issues_status if issue['metadata_injected']),
+                'needs_processing': sum(1 for issue in issues_status if issue['has_files'] and not issue['metadata_processed']),
+                'needs_injection': sum(1 for issue in issues_status if issue['metadata_processed'] and not issue['metadata_injected'])
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
     # Start scheduled tasks
