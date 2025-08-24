@@ -675,6 +675,60 @@ class VolumeDatabase:
         except Exception as e:
             print(f"❌ Error during schema migration: {e}")
             return False
+    
+    def get_volumes_needing_metadata(self) -> List[Dict]:
+        """Get volumes that need metadata processing"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, volume_folder, status, last_updated, total_issues, issues_with_files, 
+                           metadata_processed, xml_generated, metadata_injected
+                    FROM volumes 
+                    WHERE metadata_processed = FALSE AND issues_with_files > 0
+                    ORDER BY last_updated ASC
+                ''')
+                
+                rows = cursor.fetchall()
+                volumes = []
+                
+                for row in rows:
+                    volume = {
+                        'id': row[0],
+                        'volume_folder': row[1],
+                        'status': row[2],
+                        'last_updated': row[3],
+                        'total_issues': row[4],
+                        'issues_with_files': row[5],
+                        'metadata_processed': bool(row[6]),
+                        'xml_generated': bool(row[7]),
+                        'metadata_injected': bool(row[8])
+                    }
+                    volumes.append(volume)
+                
+                return volumes
+                
+        except Exception as e:
+            print(f"Error getting volumes needing metadata: {e}")
+            return []
+    
+    def get_volumes_needing_metadata_ids(self) -> List[int]:
+        """Get list of volume IDs that need metadata processing"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id FROM volumes 
+                    WHERE metadata_processed = FALSE AND issues_with_files > 0
+                    ORDER BY last_updated ASC
+                ''')
+                
+                rows = cursor.fetchall()
+                return [row[0] for row in rows]
+                
+        except Exception as e:
+            print(f"Error getting volume IDs needing metadata: {e}")
+            return []
 
 
 # Global volume database instance

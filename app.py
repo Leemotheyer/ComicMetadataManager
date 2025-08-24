@@ -12,6 +12,7 @@ from KapowarrSearch import check_volume_exists, get_total_volumes_from_stats
 from MetadataGather import ComicMetadataFetcher
 from settings_manager import settings_manager
 from volume_database import volume_db
+from scheduled_tasks import ScheduledTaskManager
 
 # Import utility functions
 from utils import (
@@ -245,6 +246,9 @@ class VolumeManager:
 # Initialize volume manager
 volume_manager = VolumeManager()
 
+# Initialize scheduled task manager
+scheduled_task_manager = ScheduledTaskManager(volume_manager, volume_db, settings_manager)
+
 @app.route('/')
 def index():
     """Main page showing volume list"""
@@ -268,6 +272,15 @@ def volume_detail(volume_id):
                              'KAPOWARR_API_KEY': volume_manager.api_key,
                              'KAPOWARR_URL': volume_manager.base_url
                          })
+
+@app.route('/scheduled-tasks')
+def scheduled_tasks():
+    """Display the scheduled tasks management page"""
+    try:
+        return render_template('scheduled_tasks.html', config=settings_manager)
+    except Exception as e:
+        flash(f'Error loading scheduled tasks page: {str(e)}', 'error')
+        return redirect(url_for('index'))
 
 @app.route('/api/volumes')
 def get_volumes():
@@ -1008,5 +1021,110 @@ def cleanup_temp_directories():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+# Scheduled Tasks API Endpoints
+@app.route('/api/scheduled-tasks/status', methods=['GET'])
+def get_scheduled_tasks_status():
+    """Get the status of the scheduled task system"""
+    try:
+        stats = scheduled_task_manager.get_stats()
+        config = scheduled_task_manager.get_config()
+        scheduled_tasks = scheduled_task_manager.get_scheduled_tasks()
+        
+        return jsonify({
+            'success': True,
+            'running': scheduled_task_manager.running,
+            'stats': stats,
+            'config': config,
+            'scheduled_tasks': scheduled_tasks
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/scheduled-tasks/start', methods=['POST'])
+def start_scheduled_tasks():
+    """Start the scheduled task system"""
+    try:
+        scheduled_task_manager.start()
+        return jsonify({
+            'success': True,
+            'message': 'Scheduled task system started successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/scheduled-tasks/stop', methods=['POST'])
+def stop_scheduled_tasks():
+    """Stop the scheduled task system"""
+    try:
+        scheduled_task_manager.stop()
+        return jsonify({
+            'success': True,
+            'message': 'Scheduled task system stopped successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/scheduled-tasks/run-task', methods=['POST'])
+def run_scheduled_task_now():
+    """Run a specific scheduled task immediately"""
+    try:
+        data = request.get_json()
+        task_name = data.get('task_name')
+        
+        if not task_name:
+            return jsonify({'success': False, 'error': 'Task name is required'})
+        
+        scheduled_task_manager.run_task_now(task_name)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Task "{task_name}" started successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/scheduled-tasks/config', methods=['POST'])
+def update_scheduled_tasks_config():
+    """Update the configuration of the scheduled task system"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'Configuration data is required'})
+        
+        scheduled_task_manager.update_config(data)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Scheduled task configuration updated successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/scheduled-tasks/config/reset', methods=['POST'])
+def reset_scheduled_tasks_config():
+    """Reset the configuration to default values"""
+    try:
+        scheduled_task_manager.reset_config_to_defaults()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Scheduled task configuration reset to defaults successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+def start_scheduled_tasks():
+    """Start the scheduled task system"""
+    try:
+        scheduled_task_manager.start()
+        print("✅ Scheduled task system started successfully")
+    except Exception as e:
+        print(f"❌ Failed to start scheduled task system: {e}")
+
 if __name__ == '__main__':
+    # Start scheduled tasks
+    start_scheduled_tasks()
+    
+    # Start Flask app
     app.run(debug=True, host='0.0.0.0', port=5000)

@@ -46,7 +46,8 @@ The application uses `config/config.json` for configuration. Key settings includ
 - `comicvine_api_key`: Your ComicVine API key
 - `kapowarr_parent_folder`: Parent folder path from Kapowarr (e.g., "/comics-1") to map to local "/comics" folder
 - `temp_directory`: Directory for temporary files
-- `max_concurrent_tasks`: Maximum concurrent processing tasks
+- `max_concurrent_tasks`: Maximum concurrent processing tasks for manual operations
+- `max_concurrent_metadata_tasks`: Maximum concurrent tasks for scheduled metadata processing
 
 These can be set from the web GUI in the settings page
 
