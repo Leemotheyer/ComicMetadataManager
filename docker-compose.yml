@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  comic-metadata:
+    build: .
+    container_name: comic-metadata-manager
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mount comics directory for file processing
+      - ./comics:/app/comics
+      # Mount config directory for persistent configuration
+      - ./config:/app/config
+
+    restart: unless-stopped
