@@ -24,6 +24,12 @@ from utils import (
     map_kapowarr_to_local_path
 )
 
+# Import comic metadata reader
+from comic_metadata_reader import ComicMetadataReader
+
+# Import batch processor
+from batch_processor import get_batch_manager
+
 app = Flask(__name__, static_folder='static')
 app.secret_key = settings_manager.get_setting('flask_secret_key')
 
@@ -967,6 +973,229 @@ def get_volume_issue_status(volume_id):
         # Use the new method from volume_database
         result = volume_db.get_volume_issue_status(volume_id, volume_details)
         return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# Comic Metadata Reader Routes
+@app.route('/api/comic/read-metadata', methods=['POST'])
+def read_comic_metadata():
+    """Read metadata from a specific comic file"""
+    try:
+        data = request.get_json()
+        comic_file_path = data.get('file_path')
+        
+        if not comic_file_path:
+            return jsonify({'success': False, 'error': 'File path is required'})
+        
+        # Map Kapowarr path to local path if needed
+        local_path = map_kapowarr_to_local_path(comic_file_path)
+        
+        reader = ComicMetadataReader()
+        result = reader.read_comic_metadata(local_path)
+        
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/volume/<int:volume_id>/scan-metadata')
+def scan_volume_metadata(volume_id):
+    """Scan all comic files in a volume and analyze their metadata"""
+    try:
+        # Get volume details to get the folder path
+        volume_details = volume_manager.get_volume_details(volume_id)
+        if not volume_details:
+            return jsonify({'success': False, 'error': 'Volume not found'})
+        
+        folder_path = volume_details.get('folder', '')
+        if not folder_path:
+            return jsonify({'success': False, 'error': 'Volume folder path not found'})
+        
+        # Map to local path
+        local_folder_path = map_kapowarr_to_local_path(folder_path)
+        
+        if not os.path.exists(local_folder_path):
+            return jsonify({'success': False, 'error': f'Folder not found: {local_folder_path}'})
+        
+        reader = ComicMetadataReader()
+        comic_files = reader.scan_directory_for_comics(local_folder_path, recursive=True)
+        
+        if not comic_files:
+            return jsonify({
+                'success': True,
+                'message': 'No comic files found in volume folder',
+                'data': {
+                    'total_files': 0,
+                    'files_with_metadata': 0,
+                    'files_without_metadata': 0,
+                    'detailed_results': []
+                }
+            })
+        
+        # Read metadata from all comic files
+        results = reader.batch_read_metadata(comic_files)
+        
+        # Generate summary
+        summary = {
+            'total_files': len(results),
+            'files_with_metadata': sum(1 for r in results if r['has_metadata']),
+            'files_without_metadata': sum(1 for r in results if not r['has_metadata']),
+            'files_with_errors': sum(1 for r in results if r['error']),
+            'format_breakdown': {},
+            'detailed_results': results
+        }
+        
+        # Format breakdown
+        for result in results:
+            fmt = result['file_format']
+            if fmt not in summary['format_breakdown']:
+                summary['format_breakdown'][fmt] = {'total': 0, 'with_metadata': 0}
+            summary['format_breakdown'][fmt]['total'] += 1
+            if result['has_metadata']:
+                summary['format_breakdown'][fmt]['with_metadata'] += 1
+        
+        return jsonify({
+            'success': True,
+            'data': summary
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/comic/compare-metadata', methods=['POST'])
+def compare_comic_metadata():
+    """Compare existing comic metadata with new metadata from ComicVine"""
+    try:
+        data = request.get_json()
+        comic_file_path = data.get('file_path')
+        volume_id = data.get('volume_id')
+        issue_number = data.get('issue_number')
+        
+        if not all([comic_file_path, volume_id, issue_number]):
+            return jsonify({'success': False, 'error': 'File path, volume ID, and issue number are required'})
+        
+        # Read existing metadata from comic file
+        local_path = map_kapowarr_to_local_path(comic_file_path)
+        reader = ComicMetadataReader()
+        existing_result = reader.read_comic_metadata(local_path)
+        
+        if existing_result['error']:
+            return jsonify({'success': False, 'error': f"Error reading comic file: {existing_result['error']}"})
+        
+        # Get new metadata from ComicVine
+        metadata_fetcher = ComicMetadataFetcher()
+        volume_details = volume_manager.get_volume_details(volume_id)
+        
+        if not volume_details:
+            return jsonify({'success': False, 'error': 'Volume not found'})
+        
+        # Find the specific issue
+        target_issue = None
+        for issue in volume_details.get('issues', []):
+            if str(issue.get('issue_number', '')) == str(issue_number):
+                target_issue = issue
+                break
+        
+        if not target_issue:
+            return jsonify({'success': False, 'error': f'Issue {issue_number} not found'})
+        
+        # Get ComicVine metadata for the issue
+        comicvine_id = target_issue.get('comicvine_id')
+        if not comicvine_id:
+            return jsonify({'success': False, 'error': 'Issue has no ComicVine ID'})
+        
+        cv_metadata = metadata_fetcher.get_comicvine_metadata(comicvine_id)
+        if not cv_metadata:
+            return jsonify({'success': False, 'error': 'Failed to fetch ComicVine metadata'})
+        
+        # Convert ComicVine metadata to ComicInfo format for comparison
+        new_metadata = {
+            'Title': cv_metadata.get('name', ''),
+            'Series': volume_details.get('name', ''),
+            'Number': target_issue.get('issue_number', ''),
+            'Volume': volume_details.get('start_year', ''),
+            'Year': cv_metadata.get('cover_date', '').split('-')[0] if cv_metadata.get('cover_date') else '',
+            'Writer': ', '.join([person['name'] for person in cv_metadata.get('person_credits', []) if 'writer' in person.get('role', '').lower()]),
+            'Penciller': ', '.join([person['name'] for person in cv_metadata.get('person_credits', []) if 'pencil' in person.get('role', '').lower()]),
+            'Summary': cv_metadata.get('description', ''),
+            'Publisher': volume_details.get('publisher', ''),
+            'Web': cv_metadata.get('site_detail_url', '')
+        }
+        
+        # Compare metadata
+        comparison = reader.compare_metadata(
+            existing_result.get('parsed_metadata', {}),
+            new_metadata
+        )
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'existing_metadata': existing_result.get('parsed_metadata', {}),
+                'new_metadata': new_metadata,
+                'comparison': comparison,
+                'has_existing_metadata': existing_result['has_metadata']
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/batch/scan-metadata', methods=['POST'])
+def batch_scan_metadata():
+    """Scan metadata for multiple volumes at once"""
+    try:
+        data = request.get_json()
+        volume_ids = data.get('volume_ids', [])
+        
+        if not volume_ids:
+            return jsonify({'success': False, 'error': 'Volume IDs are required'})
+        
+        reader = ComicMetadataReader()
+        batch_results = {}
+        
+        for volume_id in volume_ids:
+            try:
+                volume_details = volume_manager.get_volume_details(volume_id)
+                if not volume_details:
+                    batch_results[volume_id] = {'error': 'Volume not found'}
+                    continue
+                
+                folder_path = volume_details.get('folder', '')
+                if not folder_path:
+                    batch_results[volume_id] = {'error': 'Volume folder path not found'}
+                    continue
+                
+                local_folder_path = map_kapowarr_to_local_path(folder_path)
+                
+                if not os.path.exists(local_folder_path):
+                    batch_results[volume_id] = {'error': f'Folder not found: {local_folder_path}'}
+                    continue
+                
+                comic_files = reader.scan_directory_for_comics(local_folder_path, recursive=True)
+                results = reader.batch_read_metadata(comic_files)
+                
+                summary = {
+                    'volume_name': volume_details.get('name', ''),
+                    'total_files': len(results),
+                    'files_with_metadata': sum(1 for r in results if r['has_metadata']),
+                    'files_without_metadata': sum(1 for r in results if not r['has_metadata']),
+                    'files_with_errors': sum(1 for r in results if r['error'])
+                }
+                
+                batch_results[volume_id] = summary
+                
+            except Exception as e:
+                batch_results[volume_id] = {'error': str(e)}
+        
+        return jsonify({
+            'success': True,
+            'data': batch_results
+        })
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
