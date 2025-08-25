@@ -11,5 +11,9 @@ services:
       - ./comics:/app/comics
       # Mount config directory for persistent configuration
       - ./config:/app/config
-
+      # Mount temp directory for temporary files
+      - ./temp:/app/temp
+    environment:
+      - RARFILE_UNRAR_TOOL=/usr/bin/unrar
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped

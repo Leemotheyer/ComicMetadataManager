@@ -11,6 +11,14 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# Configure rarfile to use the correct unrar binary in Docker
+try:
+    import rarfile
+    # Set the path to unrar binary for Docker environment
+    rarfile.UNRAR_TOOL = "/usr/bin/unrar"
+except ImportError:
+    pass
+
 # Import app modules
 try:
     from settings_manager import settings_manager
