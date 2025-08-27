@@ -335,6 +335,11 @@ class ComicMetadataInjector:
                     patoolib.create_archive(new_archive, files_to_archive)
                 
                 # Verify the archive was created in temp directory
+                print(f"🔍 First verification - checking: {new_archive}")
+                print(f"🔍 First verification - current working directory: {os.getcwd()}")
+                print(f"🔍 First verification - file exists: {os.path.exists(new_archive)}")
+                print(f"🔍 First verification - absolute path: {os.path.abspath(new_archive)}")
+                
                 if not os.path.exists(new_archive):
                     raise Exception("Archive file was not created in temp directory")
                 
@@ -354,6 +359,12 @@ class ComicMetadataInjector:
                 print(f"📁 Restored working directory to: {original_cwd}")
             
             # Verify the archive was moved successfully
+            # The archive should now be in the original directory
+            print(f"🔍 Verifying archive: {new_archive}")
+            print(f"🔍 Current working directory: {os.getcwd()}")
+            print(f"🔍 File exists: {os.path.exists(new_archive)}")
+            print(f"🔍 Absolute path: {os.path.abspath(new_archive)}")
+            
             if os.path.exists(new_archive):
                 archive_size = os.path.getsize(new_archive)
                 print(f"✅ Archive verified successfully: {os.path.basename(new_archive)} ({archive_size} bytes)")
