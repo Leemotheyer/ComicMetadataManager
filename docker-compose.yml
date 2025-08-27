@@ -11,5 +11,8 @@ services:
       - ./comics:/app/comics
       # Mount config directory for persistent configuration
       - ./config:/app/config
-
+      # Mount temp directory for temporary files
+      - ./temp:/app/temp
+    environment:
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped

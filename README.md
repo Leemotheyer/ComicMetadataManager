@@ -10,6 +10,9 @@ A companion app to go along with Kapowarr to be able to be able to generate Comi
 - **Caching System**: Database-backed caching for improved performance
 - **Web Interface**: Modern, responsive web GUI for easy management
 
+Does not currently support rar/cbr file formats.
+zip/cbz work as intened and within Kapowarr you can convert all files to zip/cbz
+
 ## Quick Start
 
 ### Prerequisites

@@ -4,10 +4,10 @@ Integrates with the Comic Metadata Manager app to inject metadata into comic fil
 """
 
 import os
-import patoolib
 import shutil
 import sys
 import time
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -25,7 +25,8 @@ class ComicMetadataInjector:
     """Handles injecting metadata into comic files"""
     
     def __init__(self):
-        self.supported_formats = ['.cbr', '.cbz', '.cbt', '.cb7']
+        # Only support ZIP-based formats
+        self.supported_formats = ['.cbz', '.zip']
         self.temp_dir = None
     
     def inject_metadata(self, volume_id: int, xml_files: List[str], 
@@ -161,6 +162,9 @@ class ComicMetadataInjector:
             try:
                 # Extract comic file
                 print(f"📦 Extracting {comic_filename}...")
+                
+                # Use patoolib for ZIP/CBZ extraction
+                import patoolib
                 patoolib.extract_archive(comic_file, outdir=temp_dir)
                 
                 # List extracted files
@@ -285,15 +289,17 @@ class ComicMetadataInjector:
                 os.chdir(temp_dir)
                 print(f"📁 Changed working directory to: {temp_dir}")
                 
-                # Use patoolib to create archive
-                # Now we're in the temp directory, so just pass filenames
-                # For RAR files (.cbr), we need to ensure WinRAR is available
-                if file_ext == '.cbr':
-                    print(f"📦 Creating RAR archive (this may take a moment)...")
-                
+                # Use patoolib to create ZIP archive
+                print(f"📦 Creating ZIP archive...")
+                import patoolib
                 patoolib.create_archive(new_archive, files_to_archive)
                 
                 # Verify the archive was created in temp directory
+                print(f"🔍 First verification - checking: {new_archive}")
+                print(f"🔍 First verification - current working directory: {os.getcwd()}")
+                print(f"🔍 First verification - file exists: {os.path.exists(new_archive)}")
+                print(f"🔍 First verification - absolute path: {os.path.abspath(new_archive)}")
+                
                 if not os.path.exists(new_archive):
                     raise Exception("Archive file was not created in temp directory")
                 
@@ -313,6 +319,12 @@ class ComicMetadataInjector:
                 print(f"📁 Restored working directory to: {original_cwd}")
             
             # Verify the archive was moved successfully
+            # The archive should now be in the original directory
+            print(f"🔍 Verifying archive: {new_archive}")
+            print(f"🔍 Current working directory: {os.getcwd()}")
+            print(f"🔍 File exists: {os.path.exists(new_archive)}")
+            print(f"🔍 Absolute path: {os.path.abspath(new_archive)}")
+            
             if os.path.exists(new_archive):
                 archive_size = os.path.getsize(new_archive)
                 print(f"✅ Archive verified successfully: {os.path.basename(new_archive)} ({archive_size} bytes)")
@@ -324,9 +336,7 @@ class ComicMetadataInjector:
         except Exception as e:
             print(f"❌ Error creating new archive: {e}")
             # Try to provide more helpful error information
-            if "rar" in str(e).lower() or "winrar" in str(e).lower():
-                print(f"💡 Tip: Make sure WinRAR is installed and accessible for .cbr files")
-            elif "zip" in str(e).lower():
+            if "zip" in str(e).lower():
                 print(f"💡 Tip: Make sure zip tools are available for .cbz files")
             raise
 
@@ -419,7 +429,7 @@ class ComicMetadataInjector:
                     print(f"⚠️ Failed to clean up {temp_dir}: {e}")
         else:
             print(f"✅ No old temp directories found")
-
+    
     def process_issue_metadata(self, volume_id: int, issue_index: int, volume_details: dict, 
                              metadata_fetcher, volume_db) -> dict:
         """
@@ -607,8 +617,6 @@ class ComicMetadataInjector:
                 'success': False,
                 'error': str(e)
             }
-
-
 
 
 # Standalone usage (for testing)
