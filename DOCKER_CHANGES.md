@@ -1,40 +1,26 @@
 # Docker Containerization Changes
 
-This document summarizes all the changes made to make the Comic Metadata Manager run properly in a Docker container, specifically addressing the WinRAR dependency issue.
+This document summarizes all the changes made to make the Comic Metadata Manager run properly in a Docker container, specifically addressing the RAR/CBR file handling issue.
 
 ## Problem Statement
 
-The original application was developed with WinRAR for handling RAR and CBR files, which doesn't work in Linux-based Docker containers.
+The original application was developed with WinRAR for handling RAR and CBR files, which doesn't work in Linux-based Docker containers. The previous solution using unrar tools was not working reliably.
 
 ## Solution Overview
 
-Replaced WinRAR dependency with Linux-compatible unrar tools and configured the application to use them properly.
+Replaced WinRAR dependency with PeaZip, a cross-platform archive manager that works reliably in Linux-based Docker containers for handling RAR and CBR files.
 
 ## Changes Made
 
 ### 1. Updated Dockerfile (`Dockerfile`)
 
 **Key Changes:**
-- Added comprehensive unrar tools: `unrar`, `unrar-free`, `p7zip-full`, `zip`, `unzip`
-- Created symbolic link: `ln -sf /usr/bin/unrar /usr/bin/rar`
-- Set environment variable: `RARFILE_UNRAR_TOOL=/usr/bin/unrar`
-- Added proper directory permissions
-- Added health check for RAR functionality
-- Made test script executable
+- Replaced unrar tools with PeaZip installation
+- Removed unrar-related environment variables and symbolic links
+- Updated health check to test PeaZip functionality
+- Renamed test script to reflect PeaZip usage
 
 **Before:**
-```dockerfile
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    libffi-dev \
-    curl \
-    unrar \
-    unrar-free \
-    && rm -rf /var/lib/apt/lists/*
-```
-
-**After:**
 ```dockerfile
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -59,38 +45,56 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python test_rar.py || exit 1
 ```
 
+**After:**
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libffi-dev \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PeaZip for RAR/CBR handling
+RUN wget -O peazip.deb https://github.com/peazip/PeaZip/releases/download/9.5.0/peazip_9.5.0.LINUX.GTK2-2_amd64.deb && \
+    apt-get update && \
+    apt-get install -y ./peazip.deb && \
+    rm peazip.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+# Health check to verify PeaZip functionality
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python test_peazip.py || exit 1
+```
+
 ### 2. Updated docker-compose.yml
 
 **Key Changes:**
-- Added temp directory volume mount
-- Added environment variables for RAR functionality
-- Added Python unbuffered output
+- Removed RARFILE_UNRAR_TOOL environment variable
+- Kept other environment variables for Python functionality
 
 **Before:**
 ```yaml
-volumes:
-  - ./comics:/app/comics
-  - ./config:/app/config
+environment:
+  - RARFILE_UNRAR_TOOL=/usr/bin/unrar
+  - PYTHONUNBUFFERED=1
 ```
 
 **After:**
 ```yaml
-volumes:
-  - ./comics:/app/comics
-  - ./config:/app/config
-  - ./temp:/app/temp
 environment:
-  - RARFILE_UNRAR_TOOL=/usr/bin/unrar
   - PYTHONUNBUFFERED=1
 ```
 
 ### 3. Modified MetaDataAdd.py
 
 **Key Changes:**
-- Added rarfile configuration at module level
-- Set `rarfile.UNRAR_TOOL` to point to Linux unrar binary
+- Removed rarfile import and configuration
+- Added PeaZip subprocess handling for RAR/CBR files
+- Added PeaZip availability checking
+- Updated error messages to reference PeaZip instead of WinRAR
 
-**Added at the top of the file:**
+**Removed:**
 ```python
 # Configure rarfile to use the correct unrar binary in Docker
 try:
@@ -101,133 +105,67 @@ except ImportError:
     pass
 ```
 
-### 4. Created Test Script (`test_rar.py`)
+**Added:**
+```python
+import subprocess
 
-**Purpose:** Verify RAR functionality works in the container
+class ComicMetadataInjector:
+    def __init__(self):
+        self.supported_formats = ['.cbr', '.cbz', '.cbt', '.cb7']
+        self.temp_dir = None
+        self.peazip_path = "/usr/bin/peazip"
+    
+    def _check_peazip_available(self):
+        """Check if PeaZip is available on the system"""
+        try:
+            result = subprocess.run([self.peazip_path, "-help"], 
+                                  capture_output=True, text=True, timeout=10)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+            return False
+```
 
-**Features:**
-- Tests unrar binary availability
-- Tests rarfile package import
-- Tests patoolib package import
-- Tests actual RAR archive creation
-- Comprehensive error reporting
+### 4. Created Test Script (`test_peazip.py`)
 
-### 5. Created Documentation
+**Purpose:** Verify PeaZip functionality works in the container
 
-**Files Created:**
-- `DOCKER_README.md`: Comprehensive Docker deployment guide
-- `DOCKER_CHANGES.md`: This summary document
+**Key Features:**
+- Tests PeaZip binary availability
+- Tests PeaZip command execution
+- Tests actual RAR archive creation and extraction
+- Comprehensive error handling and cleanup
 
-**Key Sections:**
-- Quick start guide
-- Troubleshooting RAR issues
-- Performance optimization
-- Security considerations
-- Common issues and solutions
-
-### 6. Created Startup Script (`start_docker.sh`)
-
-**Purpose:** Automated setup and deployment
-
-**Features:**
-- Checks Docker and Docker Compose installation
-- Creates necessary directories
-- Sets proper permissions
-- Builds and starts container
-- Provides useful commands
+**Usage:**
+- Health check verification
+- Troubleshooting PeaZip issues
+- Manual testing of RAR/CBR functionality
 
 ## Technical Details
 
 ### RAR File Handling
 
-**Before (Windows):**
+**Before:**
 - Relied on WinRAR installation
-- Used Windows-specific paths
 - Required WinRAR license
+- Used rarfile Python package
 
-**After (Linux Docker):**
-- Uses `unrar` and `unrar-free` packages
-- Linux-compatible binary paths
-- Open-source tools, no license required
+**After:**
+- Uses PeaZip (open source)
+- No license requirements
+- Direct subprocess calls to PeaZip binary
 
-### Archive Support
+### Supported Formats
 
-The container now supports:
-- **RAR/CBR**: Using unrar tools
-- **ZIP/CBZ**: Using zip/unzip tools
-- **7Z/CB7**: Using p7zip-full
-- **TAR/CBT**: Using tar tools
+**Archive Types:**
+- **RAR/CBR**: Using PeaZip
+- **ZIP/CBZ**: Using patoolib (unchanged)
+- **7Z/CB7**: Using patoolib (unchanged)
+- **TAR/CBT**: Using patoolib (unchanged)
 
-### Configuration
+### Environment Variables
 
-**Environment Variables:**
-- `RARFILE_UNRAR_TOOL=/usr/bin/unrar`: Tells rarfile package where to find unrar
-- `PYTHONUNBUFFERED=1`: Ensures Python output is not buffered
+**Removed:**
+- `RARFILE_UNRAR_TOOL=/usr/bin/unrar`: No longer needed
 
-**Volume Mounts:**
-- `./comics:/app/comics`: Comic files
-- `./config:/app/config`: Application configuration
-- `./temp:/app/temp`: Temporary files
-
-## Testing
-
-### Health Check
-The container includes a health check that runs `test_rar.py` every 30 seconds to verify RAR functionality.
-
-### Manual Testing
-```bash
-# Test RAR functionality
-docker-compose exec comic-metadata python test_rar.py
-
-# Check container health
-docker-compose ps
-
-# View logs
-docker-compose logs comic-metadata
-```
-
-## Deployment
-
-### Quick Start
-```bash
-# Create directories
-mkdir -p comics config temp
-
-# Set permissions
-chmod 755 comics config temp
-
-# Build and run
-docker-compose up --build
-
-# Or use the startup script
-./start_docker.sh
-```
-
-### Access Application
-- URL: `http://localhost:5000`
-- The application will be fully functional with RAR/CBR support
-
-## Benefits
-
-1. **Cross-platform compatibility**: Works on any system with Docker
-2. **No WinRAR dependency**: Uses open-source tools
-3. **Consistent environment**: Same setup across all deployments
-4. **Easy deployment**: Simple docker-compose commands
-5. **Health monitoring**: Built-in health checks
-6. **Comprehensive documentation**: Detailed guides and troubleshooting
-
-## Migration Notes
-
-For users migrating from Windows to Docker:
-
-1. **No code changes needed**: The application code remains the same
-2. **Same functionality**: All features work identically
-3. **Better performance**: Linux tools are often faster
-4. **No licensing issues**: All tools are open-source
-
-## Future Considerations
-
-1. **Multi-architecture support**: Could add ARM64 support for Apple Silicon
-2. **Resource limits**: Could add memory/CPU limits for production
-3. **Security hardening**: Could run as non-root user with proper permissions
-4. **Monitoring**: Could add Prometheus metrics for production monitoring
+**Kept:**
+- `PYTHONUNBUFFERED=1`: For proper logging in Docker
