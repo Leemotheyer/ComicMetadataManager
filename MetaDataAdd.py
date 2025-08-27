@@ -25,18 +25,9 @@ class ComicMetadataInjector:
     """Handles injecting metadata into comic files"""
     
     def __init__(self):
-        self.supported_formats = ['.cbr', '.cbz', '.cbt', '.cb7']
+        # Only support ZIP-based formats
+        self.supported_formats = ['.cbz', '.zip']
         self.temp_dir = None
-        self.peazip_path = "/usr/bin/peazip"
-    
-    def _check_peazip_available(self):
-        """Check if PeaZip is available on the system"""
-        try:
-            result = subprocess.run([self.peazip_path, "-help"], 
-                                  capture_output=True, text=True, timeout=10)
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-            return False
     
     def inject_metadata(self, volume_id: int, xml_files: List[str], 
                        kapowarr_folder_path: str) -> Dict[str, any]:
@@ -171,22 +162,10 @@ class ComicMetadataInjector:
             try:
                 # Extract comic file
                 print(f"📦 Extracting {comic_filename}...")
-                # Use PeaZip for RAR/CBR extraction
-                if comic_ext == '.cbr':
-                    if not self._check_peazip_available():
-                        raise Exception("PeaZip is not available for .cbr extraction. Please install PeaZip.")
-                    try:
-                        # PeaZip command: peazip -ext2here archive.cbr
-                        subprocess.run([self.peazip_path, "-ext2here", comic_file], 
-                                      cwd=temp_dir, capture_output=True, text=True, timeout=60, check=True)
-                    except subprocess.TimeoutExpired:
-                        raise Exception("PeaZip extraction timed out.")
-                    except subprocess.CalledProcessError as e:
-                        raise Exception(f"PeaZip extraction failed: {e}")
-                else:
-                    # Use patoolib for other formats
-                    import patoolib
-                    patoolib.extract_archive(comic_file, outdir=temp_dir)
+                
+                # Use patoolib for ZIP/CBZ extraction
+                import patoolib
+                patoolib.extract_archive(comic_file, outdir=temp_dir)
                 
                 # List extracted files
                 extracted_files = os.listdir(temp_dir)
@@ -310,29 +289,10 @@ class ComicMetadataInjector:
                 os.chdir(temp_dir)
                 print(f"📁 Changed working directory to: {temp_dir}")
                 
-                # Use patoolib to create archive
-                # Now we're in the temp directory, so just pass filenames
-                # For RAR files (.cbr), we need to ensure WinRAR is available
-                if file_ext == '.cbr':
-                    print(f"📦 Creating RAR archive (this may take a moment)...")
-                
-                # Use PeaZip for RAR/CBR creation
-                if file_ext == '.cbr':
-                    if not self._check_peazip_available():
-                        raise Exception("PeaZip is not available for .cbr creation. Please install PeaZip.")
-                    try:
-                        # PeaZip command: peazip -add archive.cbr file1 file2 ...
-                        # We need to be in the directory with the files to archive
-                        subprocess.run([self.peazip_path, "-add", new_archive] + files_to_archive, 
-                                      cwd=temp_dir, capture_output=True, text=True, timeout=60, check=True)
-                    except subprocess.TimeoutExpired:
-                        raise Exception("PeaZip archive creation timed out.")
-                    except subprocess.CalledProcessError as e:
-                        raise Exception(f"PeaZip archive creation failed: {e}")
-                else:
-                    # Use patoolib for other formats
-                    import patoolib
-                    patoolib.create_archive(new_archive, files_to_archive)
+                # Use patoolib to create ZIP archive
+                print(f"📦 Creating ZIP archive...")
+                import patoolib
+                patoolib.create_archive(new_archive, files_to_archive)
                 
                 # Verify the archive was created in temp directory
                 print(f"🔍 First verification - checking: {new_archive}")
@@ -376,9 +336,7 @@ class ComicMetadataInjector:
         except Exception as e:
             print(f"❌ Error creating new archive: {e}")
             # Try to provide more helpful error information
-            if "peazip" in str(e).lower() or "cbr" in str(e).lower():
-                print(f"💡 Tip: Make sure PeaZip is installed and accessible for .cbr files")
-            elif "zip" in str(e).lower():
+            if "zip" in str(e).lower():
                 print(f"💡 Tip: Make sure zip tools are available for .cbz files")
             raise
 
@@ -471,7 +429,7 @@ class ComicMetadataInjector:
                     print(f"⚠️ Failed to clean up {temp_dir}: {e}")
         else:
             print(f"✅ No old temp directories found")
-
+    
     def process_issue_metadata(self, volume_id: int, issue_index: int, volume_details: dict, 
                              metadata_fetcher, volume_db) -> dict:
         """
@@ -659,8 +617,6 @@ class ComicMetadataInjector:
                 'success': False,
                 'error': str(e)
             }
-
-
 
 
 # Standalone usage (for testing)
