@@ -1,0 +1,448 @@
+{% extends "base.html" %}
+
+{% block title %}Application Logs - Comic Metadata Manager{% endblock %}
+
+{% block extra_css %}
+<style>
+    .log-entry {
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        padding: 8px 12px;
+        margin-bottom: 4px;
+        border-radius: 4px;
+        border-left: 4px solid #ccc;
+    }
+    
+    .log-entry.INFO {
+        background-color: #d1ecf1;
+        border-left-color: #17a2b8;
+    }
+    
+    .log-entry.WARNING {
+        background-color: #fff3cd;
+        border-left-color: #ffc107;
+    }
+    
+    .log-entry.ERROR {
+        background-color: #f8d7da;
+        border-left-color: #dc3545;
+    }
+    
+    .log-entry.DEBUG {
+        background-color: #e2e3e5;
+        border-left-color: #6c757d;
+    }
+    
+    .log-timestamp {
+        color: #666;
+        font-weight: bold;
+    }
+    
+    .log-level {
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 0.8rem;
+    }
+    
+    .log-level.INFO {
+        background-color: #17a2b8;
+        color: white;
+    }
+    
+    .log-level.WARNING {
+        background-color: #ffc107;
+        color: black;
+    }
+    
+    .log-level.ERROR {
+        background-color: #dc3545;
+        color: white;
+    }
+    
+    .log-level.DEBUG {
+        background-color: #6c757d;
+        color: white;
+    }
+    
+    .log-source {
+        color: #495057;
+        font-style: italic;
+    }
+    
+    .log-message {
+        margin-top: 4px;
+        word-wrap: break-word;
+    }
+    
+    .filters-panel {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    
+    .stats-cards {
+        margin-bottom: 20px;
+    }
+    
+    .stats-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+    }
+    
+    .stats-card h3 {
+        margin: 0;
+        font-size: 2rem;
+        font-weight: bold;
+    }
+    
+    .stats-card p {
+        margin: 5px 0 0 0;
+        opacity: 0.9;
+    }
+    
+    .log-container {
+        max-height: 600px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        background-color: #f8f9fa;
+    }
+    
+    .auto-refresh-toggle {
+        margin-bottom: 15px;
+    }
+    
+    .export-buttons {
+        margin-bottom: 15px;
+    }
+    
+    .no-logs {
+        text-align: center;
+        padding: 40px;
+        color: #6c757d;
+        font-style: italic;
+    }
+    
+    .loading {
+        text-align: center;
+        padding: 20px;
+        color: #6c757d;
+    }
+    
+    .spinner-border-sm {
+        width: 1rem;
+        height: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2><i class="fas fa-file-alt me-2"></i>Application Logs</h2>
+            <div>
+                <button class="btn btn-outline-primary btn-sm me-2" onclick="refreshLogs()">
+                    <i class="fas fa-sync-alt me-1"></i>Refresh
+                </button>
+                <button class="btn btn-outline-danger btn-sm" onclick="clearLogs()">
+                    <i class="fas fa-trash me-1"></i>Clear Logs
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistics Cards -->
+<div class="row stats-cards">
+    <div class="col-md-3">
+        <div class="stats-card">
+            <h3 id="total-entries">-</h3>
+            <p>Total Entries</p>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stats-card">
+            <h3 id="info-count">-</h3>
+            <p>Info Messages</p>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stats-card">
+            <h3 id="warning-count">-</h3>
+            <p>Warnings</p>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stats-card">
+            <h3 id="error-count">-</h3>
+            <p>Errors</p>
+        </div>
+    </div>
+</div>
+
+<!-- Filters Panel -->
+<div class="filters-panel">
+    <div class="row">
+        <div class="col-md-3">
+            <label for="level-filter" class="form-label">Log Level</label>
+            <select class="form-select" id="level-filter">
+                <option value="">All Levels</option>
+                <option value="INFO">Info</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+                <option value="DEBUG">Debug</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label for="source-filter" class="form-label">Source</label>
+            <select class="form-select" id="source-filter">
+                <option value="">All Sources</option>
+                <option value="app">Application</option>
+                <option value="api">API</option>
+                <option value="task">Scheduled Tasks</option>
+                <option value="volume">Volume Processing</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label for="limit-filter" class="form-label">Limit</label>
+            <select class="form-select" id="limit-filter">
+                <option value="50">50 entries</option>
+                <option value="100" selected>100 entries</option>
+                <option value="250">250 entries</option>
+                <option value="500">500 entries</option>
+                <option value="1000">1000 entries</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">&nbsp;</label>
+            <div class="d-grid">
+                <button class="btn btn-primary" onclick="applyFilters()">
+                    <i class="fas fa-filter me-1"></i>Apply Filters
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Controls -->
+<div class="row">
+    <div class="col-md-6">
+        <div class="auto-refresh-toggle">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="auto-refresh-toggle">
+                <label class="form-check-label" for="auto-refresh-toggle">
+                    Auto-refresh every 5 seconds
+                </label>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="export-buttons text-end">
+            <button class="btn btn-outline-success btn-sm me-2" onclick="exportLogs('json')">
+                <i class="fas fa-download me-1"></i>Export JSON
+            </button>
+            <button class="btn btn-outline-success btn-sm" onclick="exportLogs('txt')">
+                <i class="fas fa-download me-1"></i>Export TXT
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Logs Container -->
+<div class="log-container">
+    <div id="logs-content">
+        <div class="loading">
+            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+            Loading logs...
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let autoRefreshInterval = null;
+
+// Initialize page
+document.addEventListener('DOMContentLoaded', function() {
+    loadLogs();
+    loadLogStats();
+    
+    // Setup auto-refresh toggle
+    document.getElementById('auto-refresh-toggle').addEventListener('change', function() {
+        if (this.checked) {
+            startAutoRefresh();
+        } else {
+            stopAutoRefresh();
+        }
+    });
+});
+
+function startAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+    }
+    autoRefreshInterval = setInterval(() => {
+        loadLogs();
+        loadLogStats();
+    }, 5000);
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+    }
+}
+
+function loadLogs() {
+    const level = document.getElementById('level-filter').value;
+    const source = document.getElementById('source-filter').value;
+    const limit = document.getElementById('limit-filter').value;
+    
+    const params = new URLSearchParams();
+    if (level) params.append('level', level);
+    if (source) params.append('source', source);
+    if (limit) params.append('limit', limit);
+    
+    fetch(`/api/logs?${params.toString()}`)
+        .then(response => response.json())
+        .then(data => {
+            displayLogs(data.logs);
+        })
+        .catch(error => {
+            console.error('Error loading logs:', error);
+            document.getElementById('logs-content').innerHTML = 
+                '<div class="alert alert-danger">Error loading logs</div>';
+        });
+}
+
+function loadLogStats() {
+    fetch('/api/logs/stats')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('total-entries').textContent = data.total_entries;
+            document.getElementById('info-count').textContent = data.levels.INFO || 0;
+            document.getElementById('warning-count').textContent = data.levels.WARNING || 0;
+            document.getElementById('error-count').textContent = data.levels.ERROR || 0;
+        })
+        .catch(error => {
+            console.error('Error loading log stats:', error);
+        });
+}
+
+function displayLogs(logs) {
+    const container = document.getElementById('logs-content');
+    
+    if (!logs || logs.length === 0) {
+        container.innerHTML = '<div class="no-logs">No logs found</div>';
+        return;
+    }
+    
+    const logsHtml = logs.map(log => {
+        const timestamp = new Date(log.timestamp).toLocaleString();
+        return `
+            <div class="log-entry ${log.level}">
+                <div>
+                    <span class="log-timestamp">${timestamp}</span>
+                    <span class="log-level ${log.level}">${log.level}</span>
+                    <span class="log-source">[${log.source}]</span>
+                </div>
+                <div class="log-message">${escapeHtml(log.message)}</div>
+            </div>
+        `;
+    }).join('');
+    
+    container.innerHTML = logsHtml;
+}
+
+function applyFilters() {
+    loadLogs();
+}
+
+function refreshLogs() {
+    loadLogs();
+    loadLogStats();
+}
+
+function clearLogs() {
+    if (confirm('Are you sure you want to clear all logs? This action cannot be undone.')) {
+        fetch('/api/logs/clear', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadLogs();
+                    loadLogStats();
+                    showToast('Logs cleared successfully', 'success');
+                } else {
+                    showToast('Error clearing logs', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error clearing logs:', error);
+                showToast('Error clearing logs', 'error');
+            });
+    }
+}
+
+function exportLogs(format) {
+    const level = document.getElementById('level-filter').value;
+    const source = document.getElementById('source-filter').value;
+    const limit = document.getElementById('limit-filter').value;
+    
+    const params = new URLSearchParams();
+    params.append('format', format);
+    if (level) params.append('level', level);
+    if (source) params.append('source', source);
+    if (limit) params.append('limit', limit);
+    
+    fetch(`/api/logs/export?${params.toString()}`)
+        .then(response => response.blob())
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `logs_${new Date().toISOString().split('T')[0]}.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        })
+        .catch(error => {
+            console.error('Error exporting logs:', error);
+            showToast('Error exporting logs', 'error');
+        });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showToast(message, type) {
+    // Simple toast implementation
+    const toast = document.createElement('div');
+    toast.className = `alert alert-${type === 'error' ? 'danger' : 'success'} alert-dismissible fade show position-fixed`;
+    toast.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+    toast.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+        }
+    }, 5000);
+}
+</script>
+{% endblock %}

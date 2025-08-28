@@ -24,6 +24,9 @@ from utils import (
     map_kapowarr_to_local_path
 )
 
+# Import logging service
+from app.services.logging_service import logging_service
+
 app = Flask(__name__, static_folder='static')
 app.secret_key = settings_manager.get_setting('flask_secret_key')
 
@@ -41,7 +44,7 @@ class VolumeManager:
         if self.is_configured():
             self.check_for_new_volumes()
         else:
-            print("⚠️ Kapowarr API key not configured. Skipping volume check on startup.")
+            logging_service.warning("⚠️ Kapowarr API key not configured. Skipping volume check on startup.", "app")
     
     def is_configured(self):
         """Check if the VolumeManager has the required configuration"""
@@ -62,65 +65,65 @@ class VolumeManager:
     def check_for_new_volumes(self):
         """Check if Kapowarr stats have changed and update cache if needed"""
         try:
-            print("🔍 Checking for new volumes on startup...")
+            logging_service.info("🔍 Checking for new volumes on startup...", "volume")
             current_total = get_total_volumes_from_stats(self.api_key, self.base_url)
             
             if current_total is not None:
                 if volume_db.check_kapowarr_stats_changed(current_total):
                     last_total = volume_db.get_last_kapowarr_stats()
-                    print(f"📊 Kapowarr stats changed: {last_total or 'None'} → {current_total} volumes")
-                    print("🔄 Updating cache to include new volumes...")
+                    logging_service.info(f"📊 Kapowarr stats changed: {last_total or 'None'} → {current_total} volumes", "volume")
+                    logging_service.info("🔄 Updating cache to include new volumes...", "volume")
                     
                     # Force refresh the cache
                     self.get_volume_list(force_refresh=True)
                 else:
-                    print(f"✅ Kapowarr stats unchanged: {current_total} volumes")
+                    logging_service.info(f"✅ Kapowarr stats unchanged: {current_total} volumes", "volume")
             else:
-                print("⚠️ Could not get current Kapowarr stats")
+                logging_service.warning("⚠️ Could not get current Kapowarr stats", "volume")
                 
         except Exception as e:
-            print(f"❌ Error checking for new volumes: {e}")
+            logging_service.error(f"❌ Error checking for new volumes: {e}", "volume")
     
     def get_volume_list(self, limit=100, force_refresh=False):
         """Get a list of available volumes using database cache or fresh search"""
         
-        print(f"🔍 get_volume_list called with limit={limit}, force_refresh={force_refresh}")
+        logging_service.debug(f"🔍 get_volume_list called with limit={limit}, force_refresh={force_refresh}", "volume")
         
         # Check if we have valid cached data and don't need to force refresh
         if not force_refresh:
-            print("📚 Checking cache validity...")
+            logging_service.debug("📚 Checking cache validity...", "volume")
             cache_valid = volume_db.is_cache_valid()
-            print(f"📚 Cache valid: {cache_valid}")
+            logging_service.debug(f"📚 Cache valid: {cache_valid}", "volume")
             
             if cache_valid:
-                print("📚 Using cached volume data")
+                logging_service.debug("📚 Using cached volume data", "volume")
                 cached_volumes = volume_db.get_volumes(limit)
-                print(f"📚 Retrieved {len(cached_volumes) if cached_volumes else 0} volumes from cache")
+                logging_service.debug(f"📚 Retrieved {len(cached_volumes) if cached_volumes else 0} volumes from cache", "volume")
                 if cached_volumes:
-                    print(f"✅ Retrieved {len(cached_volumes)} volumes from cache")
+                    logging_service.info(f"✅ Retrieved {len(cached_volumes)} volumes from cache", "volume")
                     return cached_volumes
                 else:
-                    print("⚠️ Cache validation passed but no volumes found in database")
+                    logging_service.warning("⚠️ Cache validation passed but no volumes found in database", "volume")
             else:
-                print("⚠️ Cache validation failed")
+                logging_service.warning("⚠️ Cache validation failed", "volume")
         else:
-            print("🔄 Force refresh requested, skipping cache check")
+            logging_service.info("🔄 Force refresh requested, skipping cache check", "volume")
         
-        print("🔄 Cache expired or force refresh requested, searching for volumes...")
+        logging_service.info("🔄 Cache expired or force refresh requested, searching for volumes...", "volume")
         
         # Perform fresh search
         volumes = []
         total_volumes = get_total_volumes_from_stats(self.api_key, self.base_url)
         
         if total_volumes is None:
-            print("Warning: Could not get total volumes from stats, using limit-based search")
+            logging_service.warning("Warning: Could not get total volumes from stats, using limit-based search", "volume")
             max_check = limit
             target_count = limit
         else:
             # If we have stats, use the total_volumes as our target, but search beyond to find all volumes
             max_check = total_volumes * 2  # Search beyond the expected total to find all volumes
             target_count = total_volumes
-            print(f"Stats indicate {total_volumes} volumes, searching up to {max_check} to find all available volumes")
+            logging_service.info(f"Stats indicate {total_volumes} volumes, searching up to {max_check} to find all available volumes", "volume")
         
         volume_count = 0
         consecutive_failures = 0
@@ -159,24 +162,24 @@ class VolumeManager:
             
             # Stop when we reach the target volume count
             if volume_count >= target_count:
-                print(f"Target volume count ({target_count}) reached, stopping search")
+                logging_service.info(f"Target volume count ({target_count}) reached, stopping search", "volume")
                 break
             
             # Failsafe: if we've hit max consecutive failures, stop searching
             if consecutive_failures >= max_consecutive_failures:
-                print(f"Failsafe triggered: {consecutive_failures} consecutive failures after checking {volume_id} volumes")
+                logging_service.warning(f"Failsafe triggered: {consecutive_failures} consecutive failures after checking {volume_id} volumes", "volume")
                 break
             
             # Progress indicator every 10 volumes
             if volume_id % 10 == 0:
-                print(f"Progress: {volume_id} volumes checked, {volume_count} found")
+                logging_service.debug(f"Progress: {volume_id} volumes checked, {volume_count} found", "volume")
         
-        print(f"Volume search completed: {volume_count} volumes found out of {volume_id} checked")
+        logging_service.info(f"Volume search completed: {volume_count} volumes found out of {volume_id} checked", "volume")
         
         # Store volumes in database for future use
         if volumes:
             volume_db.store_volumes(volumes)
-            print(f"💾 Stored {len(volumes)} volumes in database cache")
+            logging_service.info(f"💾 Stored {len(volumes)} volumes in database cache", "volume")
         
         return volumes
     
@@ -186,20 +189,20 @@ class VolumeManager:
             # Check database first
             cached_details = volume_db.get_volume_details(volume_id)
             if cached_details:
-                print(f"📚 Using cached volume details for volume {volume_id}")
+                logging_service.debug(f"📚 Using cached volume details for volume {volume_id}", "volume")
                 return cached_details
             
             # Fetch from API if not in database
-            print(f"🔄 Fetching volume details for volume {volume_id} from API")
+            logging_service.info(f"🔄 Fetching volume details for volume {volume_id} from API", "volume")
             volume = self.metadata_fetcher.search_kapowarr_volume(str(volume_id))
             if volume and volume.get('result'):
                 # Store in database for future use
                 volume_db.store_volume_details(volume_id, volume['result'])
-                print(f"💾 Stored volume {volume_id} details in database")
+                logging_service.info(f"💾 Stored volume {volume_id} details in database", "volume")
                 return volume['result']
             return None
         except Exception as e:
-            print(f"Error getting volume details: {e}")
+            logging_service.error(f"Error getting volume details: {e}", "volume")
             return None
     
     def process_volume_metadata(self, volume_id, manual_override=False):
@@ -210,12 +213,12 @@ class VolumeManager:
             manual_override: If True, reprocess issues even if they already have metadata
         """
         try:
-            print(f"🔄 Starting metadata processing for volume {volume_id} (manual_override={manual_override})")
+            logging_service.info(f"🔄 Starting metadata processing for volume {volume_id} (manual_override={manual_override})", "volume")
             
             # First get volume details to see which issues have files
             volume_details = self.get_volume_details(volume_id)
             if not volume_details or 'issues' not in volume_details:
-                print(f"No volume details or issues found for volume {volume_id}")
+                logging_service.warning(f"No volume details or issues found for volume {volume_id}", "volume")
                 return {}
             
             # Filter issues to only include those with files
@@ -229,13 +232,13 @@ class VolumeManager:
                     skipped_count += 1
             
             if skipped_count > 0:
-                print(f"Skipping {skipped_count} issues without files from volume {volume_id}")
+                logging_service.info(f"Skipping {skipped_count} issues without files from volume {volume_id}", "volume")
             
             if not issues_with_files:
-                print(f"No issues with files found in volume {volume_id}")
+                logging_service.warning(f"No issues with files found in volume {volume_id}", "volume")
                 return {}
             
-            print(f"Found {len(issues_with_files)} issues with files in volume {volume_id}")
+            logging_service.info(f"Found {len(issues_with_files)} issues with files in volume {volume_id}", "volume")
             
             # Check which issues already have metadata processed
             issues_needing_metadata = []
@@ -250,39 +253,39 @@ class VolumeManager:
                         if manual_override:
                             # Manual override: include this issue for reprocessing
                             issues_needing_metadata.append(issue)
-                            print(f"🔄 Manual override: including already processed issue {issue.get('issue_number', 'Unknown')} for reprocessing")
+                            logging_service.info(f"🔄 Manual override: including already processed issue {issue.get('issue_number', 'Unknown')} for reprocessing", "volume")
                         else:
                             # Scheduled task: skip already processed issues
                             already_processed_count += 1
-                            print(f"Issue {issue.get('issue_number', 'Unknown')} already has metadata processed, skipping")
+                            logging_service.debug(f"Issue {issue.get('issue_number', 'Unknown')} already has metadata processed, skipping", "volume")
                             continue
                     else:
                         issues_needing_metadata.append(issue)
-                        print(f"Issue {issue.get('issue_number', 'Unknown')} needs metadata processing")
+                        logging_service.debug(f"Issue {issue.get('issue_number', 'Unknown')} needs metadata processing", "volume")
                 else:
-                    print(f"Issue {issue.get('issue_number', 'Unknown')} has no ComicVine ID")
+                    logging_service.warning(f"Issue {issue.get('issue_number', 'Unknown')} has no ComicVine ID", "volume")
             
             if already_processed_count > 0 and not manual_override:
-                print(f"Skipping {already_processed_count} already processed issues from volume {volume_id}")
+                logging_service.info(f"Skipping {already_processed_count} already processed issues from volume {volume_id}", "volume")
             
             if not issues_needing_metadata:
                 if manual_override:
-                    print(f"🔄 Manual override: all issues in volume {volume_id} already have metadata, but reprocessing anyway...")
+                    logging_service.info(f"🔄 Manual override: all issues in volume {volume_id} already have metadata, but reprocessing anyway...", "volume")
                     # For manual override, process all issues even if they already have metadata
                     issues_needing_metadata = issues_with_files.copy()
                 else:
-                    print(f"All issues in volume {volume_id} already have metadata processed")
+                    logging_service.info(f"All issues in volume {volume_id} already have metadata processed", "volume")
                     # Update volume status to indicate all issues are processed
                     volume_db.update_volume_status(volume_id, metadata_processed=True)
                     return {}
             
             # Now process metadata for issues that need it
             if manual_override:
-                print(f"🔄 Manual override: processing metadata for {len(issues_needing_metadata)} issues in volume {volume_id}")
+                logging_service.info(f"🔄 Manual override: processing metadata for {len(issues_needing_metadata)} issues in volume {volume_id}", "volume")
                 if already_processed_count > 0:
-                    print(f"🔄 Note: {already_processed_count} issues already have metadata but will be reprocessed due to manual override")
+                    logging_service.info(f"🔄 Note: {already_processed_count} issues already have metadata but will be reprocessed due to manual override", "volume")
             else:
-                print(f"Processing metadata for {len(issues_needing_metadata)} issues that need it in volume {volume_id}")
+                logging_service.info(f"Processing metadata for {len(issues_needing_metadata)} issues that need it in volume {volume_id}", "volume")
             
             # Import the metadata injector for processing individual issues
             from MetaDataAdd import ComicMetadataInjector
@@ -293,7 +296,7 @@ class VolumeManager:
                 comicvine_id = issue.get('comicvine_id')
                 issue_number = issue.get('issue_number', 'Unknown')
                 
-                print(f"Processing issue {issue_number} (ComicVine ID: {comicvine_id})")
+                logging_service.info(f"Processing issue {issue_number} (ComicVine ID: {comicvine_id})", "volume")
                 
                 # Get ComicVine metadata directly
                 metadata = self.metadata_fetcher.get_comicvine_metadata(comicvine_id)
@@ -321,18 +324,18 @@ class VolumeManager:
                                 'comicvine_metadata': metadata,
                                 'injection_result': result
                             }
-                            print(f"✅ Successfully processed and injected metadata for issue {issue_number}")
+                            logging_service.info(f"✅ Successfully processed and injected metadata for issue {issue_number}", "volume")
                         else:
-                            print(f"❌ Failed to inject metadata for issue {issue_number}: {result.get('error', 'Unknown error')}")
+                            logging_service.error(f"❌ Failed to inject metadata for issue {issue_number}: {result.get('error', 'Unknown error')}", "volume")
                     else:
-                        print(f"❌ Could not find issue index for issue {issue_number}")
+                        logging_service.error(f"❌ Could not find issue index for issue {issue_number}", "volume")
                 else:
-                    print(f"❌ Failed to get metadata for issue {issue_number}")
+                    logging_service.error(f"❌ Failed to get metadata for issue {issue_number}", "volume")
                 
                 # Rate limiting for ComicVine API
                 time.sleep(1.0)
             
-            print(f"Successfully processed metadata for {len(metadata_results)} issues")
+            logging_service.info(f"Successfully processed metadata for {len(metadata_results)} issues", "volume")
             
             # Check if all issues in the volume now have metadata
             all_issues_processed = True
@@ -347,12 +350,12 @@ class VolumeManager:
             # Update volume status if all issues are processed
             if all_issues_processed:
                 volume_db.update_volume_status(volume_id, metadata_processed=True)
-                print(f"✅ All issues in volume {volume_id} now have metadata processed")
+                logging_service.info(f"✅ All issues in volume {volume_id} now have metadata processed", "volume")
             
             return metadata_results
             
         except Exception as e:
-            print(f"Error processing volume metadata: {e}")
+            logging_service.error(f"Error processing volume metadata: {e}", "volume")
             return {}
     
 
@@ -400,6 +403,15 @@ def scheduled_tasks():
         flash(f'Error loading scheduled tasks page: {str(e)}', 'error')
         return redirect(url_for('index'))
 
+@app.route('/logs')
+def logs_page():
+    """Display the application logs page"""
+    try:
+        return render_template('logs.html')
+    except Exception as e:
+        flash(f'Error loading logs page: {str(e)}', 'error')
+        return redirect(url_for('index'))
+
 @app.route('/api/volumes')
 def get_volumes():
     """API endpoint to get volumes"""
@@ -413,12 +425,12 @@ def get_volumes():
         
         limit = request.args.get('limit', 100, type=int)
         
-        print(f"API request for volumes with limit: {limit}")
+        logging_service.info(f"API request for volumes with limit: {limit}", "api")
         volumes = volume_manager.get_volume_list(limit)
-        print(f"Returning {len(volumes)} volumes")
+        logging_service.info(f"Returning {len(volumes)} volumes", "api")
         return jsonify({'success': True, 'volumes': volumes})
     except Exception as e:
-        print(f"Error in get_volumes: {e}")
+        logging_service.error(f"Error in get_volumes: {e}", "api")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/volume/<int:volume_id>/metadata', methods=['POST'])
@@ -1087,6 +1099,91 @@ def get_volume_issue_status(volume_id):
         result = volume_db.get_volume_issue_status(volume_id, volume_details)
         return jsonify(result)
         
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# Logs API endpoints
+@app.route('/api/logs')
+def get_logs():
+    """Get application logs with optional filtering"""
+    try:
+        limit = request.args.get('limit', 100, type=int)
+        level = request.args.get('level', None)
+        source = request.args.get('source', None)
+        start_date = request.args.get('start_date', None)
+        end_date = request.args.get('end_date', None)
+        
+        logs = logging_service.get_logs(
+            limit=limit,
+            level=level,
+            source=source,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        return jsonify({
+            'success': True,
+            'logs': logs
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/logs/stats')
+def get_log_stats():
+    """Get log statistics"""
+    try:
+        stats = logging_service.get_log_stats()
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/logs/clear', methods=['POST'])
+def clear_logs():
+    """Clear all application logs"""
+    try:
+        logging_service.clear_logs()
+        return jsonify({'success': True, 'message': 'Logs cleared successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/logs/export')
+def export_logs():
+    """Export logs in specified format"""
+    try:
+        format_type = request.args.get('format', 'json')
+        level = request.args.get('level', None)
+        source = request.args.get('source', None)
+        limit = request.args.get('limit', None, type=int)
+        
+        # Get filtered logs
+        logs = logging_service.get_logs(
+            limit=limit,
+            level=level,
+            source=source
+        )
+        
+        # Export in requested format
+        if format_type == 'json':
+            from flask import Response
+            return Response(
+                json.dumps(logs, indent=2, ensure_ascii=False),
+                mimetype='application/json',
+                headers={'Content-Disposition': f'attachment; filename=logs_{datetime.now().strftime("%Y%m%d")}.json'}
+            )
+        elif format_type == 'txt':
+            from flask import Response
+            lines = []
+            for log in logs:
+                lines.append(f"[{log['timestamp']}] {log['level']} [{log['source']}] {log['message']}")
+            
+            return Response(
+                '\n'.join(lines),
+                mimetype='text/plain',
+                headers={'Content-Disposition': f'attachment; filename=logs_{datetime.now().strftime("%Y%m%d")}.txt'}
+            )
+        else:
+            return jsonify({'success': False, 'error': f'Unsupported format: {format_type}'})
+            
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
