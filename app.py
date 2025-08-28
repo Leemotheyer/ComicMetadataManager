@@ -265,6 +265,10 @@ class VolumeManager:
             else:
                 print(f"Processing metadata for {len(issues_needing_metadata)} issues that need it in volume {volume_id}")
             
+            # Import the metadata injector for processing individual issues
+            from MetaDataAdd import ComicMetadataInjector
+            injector = ComicMetadataInjector()
+            
             metadata_results = {}
             for issue in issues_needing_metadata:
                 comicvine_id = issue.get('comicvine_id')
@@ -275,20 +279,34 @@ class VolumeManager:
                 # Get ComicVine metadata directly
                 metadata = self.metadata_fetcher.get_comicvine_metadata(comicvine_id)
                 if metadata:
-                    metadata_results[comicvine_id] = {
-                        'kapowarr_issue': issue,
-                        'comicvine_metadata': metadata
-                    }
+                    # Find the issue index in the volume details
+                    issue_index = None
+                    for i, vol_issue in enumerate(volume_details['issues']):
+                        if vol_issue.get('comicvine_id') == comicvine_id:
+                            issue_index = i
+                            break
                     
-                    # Update issue metadata status
-                    volume_db.update_issue_metadata_status(
-                        volume_id, 
-                        comicvine_id, 
-                        issue_number,
-                        metadata_processed=True
-                    )
-                    
-                    print(f"✅ Successfully processed metadata for issue {issue_number}")
+                    if issue_index is not None:
+                        # Process and inject metadata for this specific issue
+                        result = injector.process_issue_metadata(
+                            volume_id, 
+                            issue_index, 
+                            volume_details, 
+                            self.metadata_fetcher, 
+                            volume_db
+                        )
+                        
+                        if result['success']:
+                            metadata_results[comicvine_id] = {
+                                'kapowarr_issue': issue,
+                                'comicvine_metadata': metadata,
+                                'injection_result': result
+                            }
+                            print(f"✅ Successfully processed and injected metadata for issue {issue_number}")
+                        else:
+                            print(f"❌ Failed to inject metadata for issue {issue_number}: {result.get('error', 'Unknown error')}")
+                    else:
+                        print(f"❌ Could not find issue index for issue {issue_number}")
                 else:
                     print(f"❌ Failed to get metadata for issue {issue_number}")
                 
