@@ -195,11 +195,6 @@ class ComicInfoXMLGenerator:
             web_elem = ET.SubElement(root, 'Web')
             web_elem.text = comicvine_metadata['site_detail_url']
         
-        # ComicVine ID for reference (custom field, but useful)
-        if comicvine_metadata.get('id'):
-            comicvine_id_elem = ET.SubElement(root, 'ComicVineID')
-            comicvine_id_elem.text = str(comicvine_metadata['id'])
-        
         # Format the XML with proper indentation
         rough_string = ET.tostring(root, 'unicode')
         reparsed = minidom.parseString(rough_string)
