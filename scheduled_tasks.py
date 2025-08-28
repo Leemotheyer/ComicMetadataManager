@@ -659,7 +659,8 @@ class ScheduledTaskManager:
                 os.rename(log_path, rotated_filename)
                 
                 # Create new empty log file
-                open(log_path, 'a').close()
+                with open(log_path, 'a') as f:
+                    pass
                 
                 logger.info(f"Rotated log file: {log_path} -> {rotated_filename}")
                 

@@ -147,7 +147,8 @@ class VolumeManager:
                         folder_name = volume_details.get('volume_folder', f'Volume {volume_id}') if volume_details else f'Volume {volume_id}'
                     # Small delay to be respectful to the API when fetching volume details
                     time.sleep(0.02)
-                except:
+                except Exception as e:
+                    logging_service.warning(f"Error getting volume details for volume {volume_id}: {e}", "volume")
                     folder_name = f'Volume {volume_id}'
                 
                 volumes.append({
