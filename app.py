@@ -37,8 +37,27 @@ class VolumeManager:
         self.base_url = settings_manager.get_setting('kapowarr_url')
         self.metadata_fetcher = ComicMetadataFetcher()
         
-        # Check for new volumes on initialization
-        self.check_for_new_volumes()
+        # Only check for new volumes if API key is configured
+        if self.is_configured():
+            self.check_for_new_volumes()
+        else:
+            print("⚠️ Kapowarr API key not configured. Skipping volume check on startup.")
+    
+    def is_configured(self):
+        """Check if the VolumeManager has the required configuration"""
+        # Check if API key is set and not a placeholder
+        api_key_valid = (self.api_key and 
+                        self.api_key.strip() and 
+                        self.api_key != 'your-kapowarr-api-key-here' and
+                        self.api_key != '')
+        
+        # Check if base URL is set and not a placeholder
+        base_url_valid = (self.base_url and 
+                         self.base_url.strip() and 
+                         self.base_url != 'http://your-kapowarr-server:port' and
+                         self.base_url != '')
+        
+        return api_key_valid and base_url_valid
     
     def check_for_new_volumes(self):
         """Check if Kapowarr stats have changed and update cache if needed"""
@@ -347,9 +366,13 @@ scheduled_task_manager = ScheduledTaskManager(volume_manager, volume_db, setting
 @app.route('/')
 def index():
     """Main page showing volume list"""
+    # Check if configuration is complete
+    is_configured = volume_manager.is_configured()
+    
     return render_template('index.html', config={
         'KAPOWARR_API_KEY': volume_manager.api_key,
-        'KAPOWARR_URL': volume_manager.base_url
+        'KAPOWARR_URL': volume_manager.base_url,
+        'IS_CONFIGURED': is_configured
     })
 
 @app.route('/volume/<int:volume_id>')
@@ -381,6 +404,13 @@ def scheduled_tasks():
 def get_volumes():
     """API endpoint to get volumes"""
     try:
+        # Check if app is configured
+        if not volume_manager.is_configured():
+            return jsonify({
+                'success': False, 
+                'error': 'App not configured. Please set up your API keys in the Settings page.'
+            })
+        
         limit = request.args.get('limit', 100, type=int)
         
         print(f"API request for volumes with limit: {limit}")

@@ -138,6 +138,14 @@ function saveSettings(formData) {
             // Hide connection test results since settings changed
             document.getElementById('connectionTestResults').style.display = 'none';
             
+            // If this is the first time configuring (API keys were empty), redirect to main page
+            const wasUnconfigured = !window.KAPOWARR_API_KEY || window.KAPOWARR_API_KEY.trim() === '';
+            if (wasUnconfigured && formData.kapowarr_api_key && formData.comicvine_api_key) {
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 1500); // Give user time to see the success message
+            }
+            
             return true;
         } else {
             throw new Error(data.error || 'Failed to save settings');
