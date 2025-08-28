@@ -432,6 +432,77 @@ def process_volume_metadata(volume_id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/volumes/batch/metadata', methods=['POST'])
+def batch_process_volume_metadata():
+    """Process metadata for multiple volumes"""
+    try:
+        data = request.get_json()
+        volume_ids = data.get('volume_ids', [])
+        
+        if not volume_ids:
+            return jsonify({'success': False, 'error': 'No volume IDs provided'})
+        
+        # Start background task for batch processing
+        task_id = f"batch_metadata_{int(time.time())}"
+        
+        def batch_metadata_task():
+            try:
+                results = []
+                total_processed = 0
+                total_errors = 0
+                
+                for volume_id in volume_ids:
+                    try:
+                        # Process each volume
+                        metadata = volume_manager.process_volume_metadata(volume_id, manual_override=True)
+                        
+                        # Get total issues from volume details for comparison
+                        volume_details = volume_manager.get_volume_details(volume_id)
+                        total_issues = len(volume_details.get('issues', [])) if volume_details else 0
+                        issues_with_files = len(metadata) if metadata else 0
+                        
+                        results.append({
+                            'volume_id': volume_id,
+                            'success': True,
+                            'issues_processed': issues_with_files,
+                            'issues_skipped': total_issues - issues_with_files,
+                            'message': f'Successfully processed {issues_with_files} issues with files'
+                        })
+                        total_processed += 1
+                        
+                    except Exception as e:
+                        results.append({
+                            'volume_id': volume_id,
+                            'success': False,
+                            'error': str(e)
+                        })
+                        total_errors += 1
+                
+                task_results[task_id] = {
+                    'status': 'completed',
+                    'result': results,
+                    'message': f'Batch processing completed. {total_processed} successful, {total_errors} errors.'
+                }
+                
+            except Exception as e:
+                task_results[task_id] = {
+                    'status': 'error',
+                    'error': str(e)
+                }
+        
+        # Start task in background
+        thread = threading.Thread(target=batch_metadata_task)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'message': f'Batch metadata processing started for {len(volume_ids)} volumes'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/api/volume/<int:volume_id>/issue/<int:issue_index>/metadata', methods=['POST'])
 def process_issue_metadata(volume_id, issue_index):
     """Process metadata for a specific issue by index and inject into comic files"""
