@@ -341,6 +341,24 @@ function batchGenerateXML() {
  * Volume Management Functions
  */
 function loadVolumes() {
+    // Check if app is configured before attempting to load volumes
+    if (!window.IS_CONFIGURED) {
+        updateStatus('Please configure API keys in Settings first', 'error');
+        showNotification('Configuration Required', 'Please configure your API keys in the Settings page before loading volumes.');
+        return;
+    }
+    
+    // Additional check for placeholder values
+    const apiKey = window.KAPOWARR_API_KEY || '';
+    const baseUrl = window.KAPOWARR_URL || '';
+    
+    if (apiKey === 'your-kapowarr-api-key-here' || apiKey === '' || 
+        baseUrl === 'http://your-kapowarr-server:port' || baseUrl === '') {
+        updateStatus('Please configure API keys in Settings first', 'error');
+        showNotification('Configuration Required', 'Please configure your API keys in the Settings page before loading volumes.');
+        return;
+    }
+    
     showLoading();
     updateStatus('Loading volumes...', 'info');
 
@@ -966,11 +984,26 @@ function setupEventListeners() {
 function initializePage() {
     setupEventListeners();
     
-    // Auto-load volumes on main page
-    if (document.getElementById('volumesContainer')) {
+    // Auto-load volumes on main page only if configured
+    if (document.getElementById('volumesContainer') && window.IS_CONFIGURED) {
         setTimeout(() => {
             loadVolumes();
         }, 500);
+    } else if (document.getElementById('volumesContainer') && !window.IS_CONFIGURED) {
+        // Show message for unconfigured state
+        const volumesContainer = document.getElementById('volumesContainer');
+        if (volumesContainer) {
+            volumesContainer.innerHTML = `
+                <div class="text-center py-4">
+                    <i class="fas fa-cog fa-3x text-muted mb-3"></i>
+                    <h5 class="text-muted">Configuration Required</h5>
+                    <p class="text-muted">Please configure your API keys in the Settings page to start using the app.</p>
+                    <a href="/settings" class="btn btn-primary">
+                        <i class="fas fa-cog me-1"></i>Go to Settings
+                    </a>
+                </div>
+            `;
+        }
     }
 }
 

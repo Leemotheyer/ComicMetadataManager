@@ -5,6 +5,29 @@
 {% block content %}
 <div class="container-fluid">
 
+        <!-- Configuration Warning -->
+        {% if not config.IS_CONFIGURED %}
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="alert alert-warning" role="alert">
+                    <h4 class="alert-heading">
+                        <i class="fas fa-exclamation-triangle me-2"></i>Configuration Required
+                    </h4>
+                    <p class="mb-2">The app is not properly configured. You need to set up your API keys before you can use the Comic Metadata Manager.</p>
+                    <hr>
+                    <p class="mb-0">
+                        <a href="/settings" class="btn btn-warning">
+                            <i class="fas fa-cog me-1"></i>Go to Settings
+                        </a>
+                        <small class="text-muted ms-3">
+                            You'll need your Kapowarr API key and ComicVine API key to get started.
+                        </small>
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Control Panel -->
         <div class="row mb-4">
             <div class="col-md-6">
@@ -176,5 +199,6 @@
     <script>
         window.KAPOWARR_API_KEY = '{{ config.KAPOWARR_API_KEY if config.KAPOWARR_API_KEY else "" }}';
         window.KAPOWARR_URL = '{{ config.KAPOWARR_URL if config.KAPOWARR_URL else "http://192.168.1.205:5656" }}';
+        window.IS_CONFIGURED = {{ 'true' if config.IS_CONFIGURED else 'false' }};
     </script>
 {% endblock %}
