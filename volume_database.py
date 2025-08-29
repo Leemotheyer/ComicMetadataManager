@@ -496,6 +496,14 @@ class VolumeDatabase:
                 if row:
                     last_updated = datetime.fromisoformat(row[0])
                     cache_age = datetime.now() - last_updated
+                    # Convert timedelta to a serializable format
+                    cache_age = {
+                        'total_seconds': cache_age.total_seconds(),
+                        'days': cache_age.days,
+                        'hours': cache_age.seconds // 3600,
+                        'minutes': (cache_age.seconds % 3600) // 60,
+                        'seconds': cache_age.seconds % 60
+                    }
                 
                 # Get processing statistics
                 cursor.execute('''
@@ -548,6 +556,27 @@ class VolumeDatabase:
                 
         except Exception as e:
             print(f"❌ Error clearing cache: {e}")
+            return False
+    
+    def clear_volume_details_cache(self) -> bool:
+        """Clear only the volume details cache, keeping basic volume list
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Clear only volume details table
+                cursor.execute('DELETE FROM volume_details')
+                
+                conn.commit()
+                print("✅ Volume details cache cleared")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Error clearing volume details cache: {e}")
             return False
     
     def cleanup_old_data(self, days_old: int = 30) -> bool:

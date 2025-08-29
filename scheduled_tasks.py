@@ -400,6 +400,16 @@ class ScheduledTaskManager:
             
             logger.info(f"Processing metadata for {len(new_issues)} new issues in volume {volume_id}")
             
+            # Get volume details for processing
+            volume_details = self.volume_manager.get_volume_details(volume_id)
+            if not volume_details or 'issues' not in volume_details:
+                logger.error(f"No volume details found for volume {volume_id}")
+                return False
+            
+            # Import the metadata injector for processing individual issues
+            from MetaDataAdd import ComicMetadataInjector
+            injector = ComicMetadataInjector()
+            
             # Process each new issue
             processed_count = 0
             for issue_info in new_issues:
@@ -410,24 +420,30 @@ class ScheduledTaskManager:
                     
                     logger.info(f"Processing new issue {issue_number} (ComicVine ID: {comicvine_id})")
                     
-                    # Get metadata from ComicVine
-                    if hasattr(self.volume_manager, 'metadata_fetcher'):
-                        metadata = self.volume_manager.metadata_fetcher.get_comicvine_metadata(comicvine_id)
-                        if metadata:
-                            # Update issue metadata status
-                            self.volume_db.update_issue_metadata_status(
-                                volume_id,
-                                comicvine_id,
-                                issue_number,
-                                metadata_processed=True
-                            )
+                    # Find the issue index in the volume details
+                    issue_index = None
+                    for i, vol_issue in enumerate(volume_details['issues']):
+                        if vol_issue.get('comicvine_id') == comicvine_id:
+                            issue_index = i
+                            break
+                    
+                    if issue_index is not None:
+                        # Process and inject metadata for this specific issue
+                        result = injector.process_issue_metadata(
+                            volume_id, 
+                            issue_index, 
+                            volume_details, 
+                            self.volume_manager.metadata_fetcher, 
+                            self.volume_db
+                        )
+                        
+                        if result['success']:
                             processed_count += 1
-                            logger.info(f"✅ Successfully processed metadata for new issue {issue_number}")
+                            logger.info(f"✅ Successfully processed and injected metadata for new issue {issue_number}")
                         else:
-                            logger.error(f"❌ Failed to get metadata for new issue {issue_number}")
+                            logger.error(f"❌ Failed to inject metadata for new issue {issue_number}: {result.get('error', 'Unknown error')}")
                     else:
-                        logger.error("Volume manager does not have metadata_fetcher")
-                        return False
+                        logger.error(f"❌ Could not find issue index for new issue {issue_number}")
                     
                     # Rate limiting
                     time.sleep(1.0)
@@ -643,7 +659,8 @@ class ScheduledTaskManager:
                 os.rename(log_path, rotated_filename)
                 
                 # Create new empty log file
-                open(log_path, 'a').close()
+                with open(log_path, 'a') as f:
+                    pass
                 
                 logger.info(f"Rotated log file: {log_path} -> {rotated_filename}")
                 

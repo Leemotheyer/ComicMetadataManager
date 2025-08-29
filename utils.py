@@ -32,7 +32,7 @@ def test_kapowarr_connection_with_settings(settings):
         elif 'volumes' in data:
             return {
                 'success': True,
-                'message': f"Connected successfully! Found {data['result']['volumes']} volumes.",
+                'message': f"Connected successfully! Found {data['volumes']} volumes.",
                 'data': data
             }
         else:

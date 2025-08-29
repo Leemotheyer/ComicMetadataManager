@@ -430,6 +430,55 @@ class ComicMetadataInjector:
         else:
             print(f"✅ No old temp directories found")
     
+    def cleanup_all_temp_dirs(self):
+        """Clean up ALL temporary directories immediately (use with caution)"""
+        print(f"🧹 Starting aggressive cleanup of ALL temporary directories...")
+        
+        # Look for any temp directories (injection or XML)
+        temp_patterns = ['temp_injection_', 'temp_xml_']
+        all_temp_dirs = []
+        
+        for item in os.listdir('.'):
+            if os.path.isdir(item):
+                for pattern in temp_patterns:
+                    if item.startswith(pattern):
+                        all_temp_dirs.append(item)
+                        break
+        
+        if all_temp_dirs:
+            print(f"🧹 Found {len(all_temp_dirs)} temporary directories to clean up:")
+            for temp_dir in all_temp_dirs:
+                print(f"  📁 {temp_dir}")
+            
+            cleaned_count = 0
+            failed_count = 0
+            
+            for temp_dir in all_temp_dirs:
+                try:
+                    print(f"🧹 Cleaning up temp directory: {temp_dir}")
+                    shutil.rmtree(temp_dir)
+                    print(f"✅ {temp_dir} cleaned up.")
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"⚠️ Failed to clean up {temp_dir}: {e}")
+                    failed_count += 1
+            
+            print(f"🧹 Cleanup complete: {cleaned_count} cleaned, {failed_count} failed")
+            return {
+                'success': True,
+                'cleaned_count': cleaned_count,
+                'failed_count': failed_count,
+                'total_found': len(all_temp_dirs)
+            }
+        else:
+            print(f"✅ No temporary directories found")
+            return {
+                'success': True,
+                'cleaned_count': 0,
+                'failed_count': 0,
+                'total_found': 0
+            }
+    
     def process_issue_metadata(self, volume_id: int, issue_index: int, volume_details: dict, 
                              metadata_fetcher, volume_db) -> dict:
         """

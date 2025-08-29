@@ -5,6 +5,29 @@
 {% block content %}
 <div class="container-fluid">
 
+        <!-- Configuration Warning -->
+        {% if not config.IS_CONFIGURED %}
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="alert alert-warning" role="alert">
+                    <h4 class="alert-heading">
+                        <i class="fas fa-exclamation-triangle me-2"></i>Configuration Required
+                    </h4>
+                    <p class="mb-2">The app is not properly configured. You need to set up your API keys before you can use the Comic Metadata Manager.</p>
+                    <hr>
+                    <p class="mb-0">
+                        <a href="/settings" class="btn btn-warning">
+                            <i class="fas fa-cog me-1"></i>Go to Settings
+                        </a>
+                        <small class="text-muted ms-3">
+                            You'll need your Kapowarr API key and ComicVine API key to get started.
+                        </small>
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Control Panel -->
         <div class="row mb-4">
             <div class="col-md-6">
@@ -13,11 +36,11 @@
                         <h5><i class="fas fa-cog me-2"></i>Control Panel</h5>
                     </div>
                     <div class="card-body">
-                                                 <div class="d-grid gap-2">
-                             <button class="btn btn-primary" onclick="loadVolumes()">
-                                 <i class="fas fa-sync-alt me-2"></i>Load Volumes
-                             </button>
-                         </div>
+                                                                         <div class="d-grid gap-2">
+                            <button class="btn btn-primary" onclick="refreshAndLoadVolumes()">
+                                <i class="fas fa-sync-alt me-2"></i>Refresh & Load Volumes
+                            </button>
+                        </div>
                         <div class="mt-3">
                             <button class="btn btn-outline-secondary btn-sm" onclick="cleanupTempFiles()">
                                 <i class="fas fa-trash me-2"></i>Cleanup Temp Files
@@ -69,13 +92,53 @@
             </div>
         </div>
 
+        <!-- Batch Operations Panel -->
+        <div class="row mb-3" id="batchOperationsPanel" style="display: none;">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-tasks me-2"></i>Batch Operations</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="badge bg-primary me-2" id="selectedCount">0 selected</span>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="selectAllVolumes()">
+                                    <i class="fas fa-check-square me-1"></i>Select All
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm ms-2" onclick="deselectAllVolumes()">
+                                    <i class="fas fa-square me-1"></i>Deselect All
+                                </button>
+                                <small class="text-muted ms-3">
+                                    <i class="fas fa-keyboard me-1"></i>Ctrl+A: Select All | Esc: Clear All
+                                </small>
+                            </div>
+                            <div>
+                                <button class="btn btn-primary" onclick="batchGetMetadata()" id="batchMetadataBtn" disabled>
+                                    <i class="fas fa-magic me-1"></i>Get Metadata
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Volumes List -->
         <div class="row">
             <div class="col">
                 <div class="card">
                                          <div class="card-header d-flex justify-content-between align-items-center">
                          <h5><i class="fas fa-list me-2"></i>Available Volumes</h5>
-                         <span class="badge bg-secondary" id="volumeCount">0 volumes</span>
+                         <div class="d-flex align-items-center">
+                             <span class="badge bg-secondary me-3" id="volumeCount">0 volumes</span>
+                             <div class="form-check" id="selectAllContainer" style="display: none;">
+                                 <input class="form-check-input" type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll()">
+                                 <label class="form-check-label" for="selectAllCheckbox">
+                                     Select All
+                                 </label>
+                             </div>
+                         </div>
                      </div>
                      <div class="card-body">
                          <!-- Search and Filter Controls -->
@@ -130,5 +193,6 @@
     <script>
         window.KAPOWARR_API_KEY = '{{ config.KAPOWARR_API_KEY if config.KAPOWARR_API_KEY else "" }}';
         window.KAPOWARR_URL = '{{ config.KAPOWARR_URL if config.KAPOWARR_URL else "http://192.168.1.205:5656" }}';
+        window.IS_CONFIGURED = {{ 'true' if config.IS_CONFIGURED else 'false' }};
     </script>
 {% endblock %}

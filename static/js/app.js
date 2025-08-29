@@ -6,6 +6,7 @@
 // Global variables
 let currentVolumes = [];
 let filteredVolumes = [];
+let selectedVolumes = new Set(); // Track selected volume IDs
 
 /**
  * Toast Notification System
@@ -95,12 +96,269 @@ function getKapowarrUrl() {
 }
 
 /**
+ * Multi-Select Management Functions
+ */
+function toggleVolumeSelection(volumeId) {
+    if (selectedVolumes.has(volumeId)) {
+        selectedVolumes.delete(volumeId);
+    } else {
+        selectedVolumes.add(volumeId);
+    }
+    updateSelectionUI();
+}
+
+function selectAllVolumes() {
+    filteredVolumes.forEach(volume => {
+        selectedVolumes.add(volume.id);
+    });
+    updateSelectionUI();
+}
+
+function deselectAllVolumes() {
+    selectedVolumes.clear();
+    updateSelectionUI();
+}
+
+function toggleSelectAll() {
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    if (selectAllCheckbox.checked) {
+        selectAllVolumes();
+    } else {
+        deselectAllVolumes();
+    }
+}
+
+function updateSelectionUI() {
+    const selectedCount = document.getElementById('selectedCount');
+    const batchOperationsPanel = document.getElementById('batchOperationsPanel');
+    const selectAllContainer = document.getElementById('selectAllContainer');
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    const batchMetadataBtn = document.getElementById('batchMetadataBtn');
+    
+    // Update selected count
+    if (selectedCount) {
+        selectedCount.textContent = `${selectedVolumes.size} selected`;
+    }
+    
+    // Show/hide batch operations panel
+    if (batchOperationsPanel) {
+        batchOperationsPanel.style.display = selectedVolumes.size > 0 ? 'block' : 'none';
+    }
+    
+    // Show/hide select all container
+    if (selectAllContainer) {
+        selectAllContainer.style.display = filteredVolumes.length > 0 ? 'block' : 'none';
+    }
+    
+    // Update select all checkbox state
+    if (selectAllCheckbox) {
+        selectAllCheckbox.checked = selectedVolumes.size === filteredVolumes.length && filteredVolumes.length > 0;
+        selectAllCheckbox.indeterminate = selectedVolumes.size > 0 && selectedVolumes.size < filteredVolumes.length;
+    }
+    
+    // Enable/disable batch operation buttons
+    if (batchMetadataBtn) {
+        batchMetadataBtn.disabled = selectedVolumes.size === 0;
+    }
+    
+    // Update individual volume checkboxes
+    filteredVolumes.forEach(volume => {
+        const checkbox = document.getElementById(`volume-checkbox-${volume.id}`);
+        if (checkbox) {
+            // Only update if the checkbox state doesn't match the selection state
+            const shouldBeChecked = selectedVolumes.has(volume.id);
+            if (checkbox.checked !== shouldBeChecked) {
+                checkbox.checked = shouldBeChecked;
+            }
+        }
+    });
+    
+    // Add visual feedback to selected volume cards
+    filteredVolumes.forEach(volume => {
+        const card = document.querySelector(`[data-volume-id="${volume.id}"]`);
+        if (card) {
+            if (selectedVolumes.has(volume.id)) {
+                card.classList.add('selected');
+            } else {
+                card.classList.remove('selected');
+            }
+        }
+    });
+}
+
+/**
+ * Batch Operations Functions
+ */
+function batchGetMetadata() {
+    if (selectedVolumes.size === 0) {
+        showNotification('Warning', 'No volumes selected');
+        return;
+    }
+    
+    const volumeIds = Array.from(selectedVolumes);
+    const confirmMessage = `Are you sure you want to get metadata for ${selectedVolumes.size} volume(s)? This may take some time.`;
+    
+    if (confirm(confirmMessage)) {
+        updateStatus(`Starting batch metadata processing for ${selectedVolumes.size} volumes...`, 'info');
+        
+        // Use the batch API endpoint
+        fetch('/api/volumes/batch/metadata', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                volume_ids: volumeIds
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                updateStatus(`Batch processing started. Task ID: ${data.task_id}`, 'info');
+                showNotification('Batch Started', data.message);
+                
+                // Poll for task completion
+                pollBatchTaskStatus(data.task_id);
+            } else {
+                updateStatus(`Error: ${data.error}`, 'error');
+                showNotification('Error', data.error);
+            }
+        })
+        .catch(error => {
+            updateStatus(`Error: ${error.message}`, 'error');
+            showNotification('Error', error.message);
+        });
+    }
+}
+
+function pollBatchTaskStatus(taskId) {
+    const pollInterval = setInterval(() => {
+        fetch(`/api/task/${taskId}/status`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    updateStatus(data.message, 'success');
+                    showNotification('Batch Complete', data.message);
+                    
+                    // Show detailed results if available
+                    if (data.result && Array.isArray(data.result)) {
+                        const successful = data.result.filter(r => r.success).length;
+                        const failed = data.result.filter(r => !r.success).length;
+                        console.log(`Batch results: ${successful} successful, ${failed} failed`);
+                    }
+                } else if (data.status === 'error') {
+                    clearInterval(pollInterval);
+                    updateStatus(`Error: ${data.error}`, 'error');
+                    showNotification('Error', data.error);
+                }
+                // If status is 'running', continue polling
+            })
+            .catch(error => {
+                clearInterval(pollInterval);
+                updateStatus(`Error polling task status: ${error.message}`, 'error');
+                showNotification('Error', `Error polling task status: ${error.message}`);
+            });
+    }, 2000); // Poll every 2 seconds
+}
+
+function batchViewDetails() {
+    if (selectedVolumes.size === 0) {
+        showNotification('Warning', 'No volumes selected');
+        return;
+    }
+    
+    if (selectedVolumes.size === 1) {
+        // Single volume - navigate directly
+        const volumeId = Array.from(selectedVolumes)[0];
+        window.location.href = `/volume/${volumeId}`;
+    } else {
+        // Multiple volumes - open in new tabs
+        selectedVolumes.forEach(volumeId => {
+            window.open(`/volume/${volumeId}`, '_blank');
+        });
+        showNotification('Info', `Opened ${selectedVolumes.size} volume details in new tabs`);
+    }
+}
+
+function batchGenerateXML() {
+    if (selectedVolumes.size === 0) {
+        showNotification('Warning', 'No volumes selected');
+        return;
+    }
+    
+    const volumeIds = Array.from(selectedVolumes);
+    const confirmMessage = `Are you sure you want to generate XML for ${selectedVolumes.size} volume(s)? This will process metadata first if needed.`;
+    
+    if (confirm(confirmMessage)) {
+        updateStatus(`Starting batch XML generation for ${selectedVolumes.size} volumes...`, 'info');
+        
+        // Process volumes one by one to avoid overwhelming the server
+        let processed = 0;
+        let errors = 0;
+        
+        function processNextVolume() {
+            if (volumeIds.length === 0) {
+                updateStatus(`Batch XML generation completed. ${processed} successful, ${errors} errors.`, 'success');
+                showNotification('Batch Complete', `Generated XML for ${processed} volumes successfully, ${errors} errors.`);
+                return;
+            }
+            
+            const volumeId = volumeIds.shift();
+            updateStatus(`Generating XML for volume ${volumeId}... (${processed + errors + 1}/${processed + errors + volumeIds.length + 1})`, 'info');
+            
+            fetch(`/api/volume/${volumeId}/xml`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    processed++;
+                } else {
+                    errors++;
+                    console.error(`Error generating XML for volume ${volumeId}:`, data.error);
+                }
+                
+                // Process next volume after a short delay
+                setTimeout(processNextVolume, 1000);
+            })
+            .catch(error => {
+                errors++;
+                console.error(`Error generating XML for volume ${volumeId}:`, error);
+                setTimeout(processNextVolume, 1000);
+            });
+        }
+        
+        processNextVolume();
+    }
+}
+
+/**
  * Volume Management Functions
  */
 function loadVolumes() {
+    // Check if app is configured before attempting to load volumes
+    if (!window.IS_CONFIGURED) {
+        updateStatus('Please configure API keys in Settings first', 'error');
+        showNotification('Configuration Required', 'Please configure your API keys in the Settings page before loading volumes.');
+        return;
+    }
+    
+    // Additional check for placeholder values
+    const apiKey = window.KAPOWARR_API_KEY || '';
+    const baseUrl = window.KAPOWARR_URL || '';
+    
+    if (apiKey === 'your-kapowarr-api-key-here' || apiKey === '' || 
+        baseUrl === 'http://your-kapowarr-server:port' || baseUrl === '') {
+        updateStatus('Please configure API keys in Settings first', 'error');
+        showNotification('Configuration Required', 'Please configure your API keys in the Settings page before loading volumes.');
+        return;
+    }
+    
     showLoading();
-    updateStatus('Loading volumes...', 'info');
+    updateStatus('Loading volumes from database...', 'info');
 
+    // Load volumes from database (fast)
     fetch('/api/volumes')
         .then(response => response.json())
         .then(data => {
@@ -120,6 +378,63 @@ function loadVolumes() {
             updateStatus(`Error: ${error.message}`, 'error');
             showNotification('Error', error.message);
         });
+}
+
+function refreshAndLoadVolumes() {
+    // Check if app is configured before attempting to load volumes
+    if (!window.IS_CONFIGURED) {
+        updateStatus('Please configure API keys in Settings first', 'error');
+        showNotification('Configuration Required', 'Please configure your API keys in the Settings page before loading volumes.');
+        return;
+    }
+    
+    // Additional check for placeholder values
+    const apiKey = window.KAPOWARR_API_KEY || '';
+    const baseUrl = window.KAPOWARR_URL || '';
+    
+    if (apiKey === 'your-kapowarr-api-key-here' || apiKey === '' || 
+        baseUrl === 'http://your-kapowarr-server:port' || baseUrl === '') {
+        updateStatus('Please configure API keys in Settings first', 'error');
+        showNotification('Configuration Required', 'Please configure your API keys in the Settings page before loading volumes.');
+        return;
+    }
+    
+    showLoading();
+    updateStatus('Refreshing volumes from Kapowarr...', 'info');
+
+    // First refresh the cache from Kapowarr
+    fetch('/api/cache/refresh', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus('Cache refreshed, loading volumes...', 'info');
+            
+            // Now load the refreshed volumes
+            return fetch('/api/volumes');
+        } else {
+            throw new Error(data.error || 'Failed to refresh cache');
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        hideLoading();
+        if (data.success) {
+            currentVolumes = data.volumes;
+            displayVolumes(data.volumes);
+            updateStatus(`Loaded ${data.volumes.length} volumes (fresh from Kapowarr)`, 'success');
+            showNotification('Success', `Loaded ${data.volumes.length} volumes (fresh from Kapowarr)`);
+        } else {
+            updateStatus(`Error: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+        }
+    })
+    .catch(error => {
+        hideLoading();
+        updateStatus(`Error: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+    });
 }
 
 function displayVolumes(volumes) {
@@ -145,11 +460,12 @@ function populateFolderFilter(volumes) {
     const folderFilter = document.getElementById('folderFilter');
     if (!folderFilter) return;
     
-    // Extract only the main folder names (first level, before any slashes)
+    // Extract only the main folder names (first level, before any slashes) from stripped paths
     const mainFolders = [...new Set(volumes.map(v => {
         if (v.volume_folder) {
-            // Split by slash and take only the first part
-            const parts = v.volume_folder.split('/');
+            // Strip parent directory and take only the first part
+            const strippedPath = stripParentDirectory(v.volume_folder);
+            const parts = strippedPath.split('/');
             return parts[0];
         }
         return null;
@@ -180,13 +496,14 @@ function applyFiltersAndDisplay() {
     
     // Apply search filter
     filteredVolumes = currentVolumes.filter(volume => {
+        const strippedPath = stripParentDirectory(volume.volume_folder);
         const matchesSearch = !searchTerm || 
-            volume.volume_folder?.toLowerCase().includes(searchTerm) ||
+            strippedPath?.toLowerCase().includes(searchTerm) ||
             volume.id.toString().includes(searchTerm);
         
         // Check if the volume's main folder matches the selected filter
         const matchesFolder = !folderFilterValue || 
-            (volume.volume_folder && volume.volume_folder.split('/')[0] === folderFilterValue);
+            (strippedPath && strippedPath.split('/')[0] === folderFilterValue);
         
         return matchesSearch && matchesFolder;
     });
@@ -194,8 +511,8 @@ function applyFiltersAndDisplay() {
     // Apply sorting
     if (sortOrderValue === 'alphabetical') {
         filteredVolumes.sort((a, b) => {
-            const folderA = a.volume_folder || `Volume ${a.id}`;
-            const folderB = b.volume_folder || `Volume ${b.id}`;
+            const folderA = stripParentDirectory(a.volume_folder) || `Volume ${a.id}`;
+            const folderB = stripParentDirectory(b.volume_folder) || `Volume ${b.id}`;
             
             // Extract just the filename (last part after the last slash) for sorting
             const filenameA = folderA.split('/').pop() || folderA;
@@ -229,10 +546,19 @@ function displayFilteredVolumes(volumes) {
 
     const volumesHTML = volumes.map(volume => `
         <div class="col-md-6 col-lg-4 mb-3">
-            <div class="card volume-card h-100">
+            <div class="card volume-card h-100" data-volume-id="${volume.id}">
                 <div class="card-body p-0">
                     <div class="d-flex">
-                        <div class="cover-image-container">
+                        <div class="cover-image-container position-relative">
+                            <!-- Selection Checkbox -->
+                            <div class="position-absolute top-0 start-0 m-2" style="z-index: 10;">
+                                <div class="form-check">
+                                    <input class="form-check-input volume-checkbox" type="checkbox" 
+                                           id="volume-checkbox-${volume.id}" 
+                                           data-volume-id="${volume.id}"
+                                           ${selectedVolumes.has(volume.id) ? 'checked' : ''}>
+                                </div>
+                            </div>
                             <div class="cover-loading">
                                 <div class="spinner-border spinner-border-sm text-primary" role="status">
                                     <span class="visually-hidden">Loading...</span>
@@ -240,7 +566,7 @@ function displayFilteredVolumes(volumes) {
                             </div>
                             <img src="${getKapowarrUrl()}/api/volumes/${volume.id}/cover?api_key=${getApiKey()}" 
                                  class="cover-image" 
-                                 alt="Cover for ${volume.volume_folder || `Volume ${volume.id}`}"
+                                 alt="Cover for ${stripParentDirectory(volume.volume_folder) || `Volume ${volume.id}`}"
                                  onload="this.classList.add('loaded'); this.previousElementSibling.style.display='none';"
                                  onerror="this.style.display='none'; this.previousElementSibling.style.display='none'; this.nextElementSibling.style.display='block';">
                             <div class="no-cover-placeholder" style="display: none;">
@@ -249,7 +575,7 @@ function displayFilteredVolumes(volumes) {
                             </div>
                         </div>
                         <div class="flex-grow-1 p-3">
-                            <h6 class="card-title">${volume.volume_folder || `Volume ${volume.id}`}</h6>
+                            <h6 class="card-title">${stripParentDirectory(volume.volume_folder) || `Volume ${volume.id}`}</h6>
                             <small class="text-muted">ID: ${volume.id}</small>
                             <span class="badge bg-success status-badge ms-2">${volume.status}</span>
                             <div class="mt-3">
@@ -274,6 +600,17 @@ function displayFilteredVolumes(volumes) {
             ${volumesHTML}
         </div>
     `;
+    
+    // Add event listeners to checkboxes
+    document.querySelectorAll('.volume-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            const volumeId = parseInt(this.getAttribute('data-volume-id'));
+            toggleVolumeSelection(volumeId);
+        });
+    });
+    
+    // Update selection UI after rendering
+    updateSelectionUI();
 }
 
 /**
@@ -323,11 +660,13 @@ function pollTaskStatusAndGenerateXML(volumeId, taskId) {
         .then(data => {
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
-                updateStatus(`Metadata processing completed for volume ${volumeId}, now preparing XML for comic injection...`, 'success');
-                showNotification('Success', 'Metadata completed, preparing XML for comic injection...');
+                updateStatus(`Metadata processing and injection completed for volume ${volumeId}!`, 'success');
+                showNotification('Success', data.message);
                 
-                // Step 2: Prepare XML for comic injection
-                generateXMLAfterMetadata(volumeId);
+                // Reload the page to show updated data
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
             } else if (data.status === 'error') {
                 clearInterval(pollInterval);
                 updateStatus(`Error: ${data.error}`, 'error');
@@ -341,85 +680,26 @@ function pollTaskStatusAndGenerateXML(volumeId, taskId) {
     }, 2000);
 }
 
-function generateXMLAfterMetadata(volumeId) {
-    updateStatus(`Preparing XML metadata for comic injection for volume ${volumeId}...`, 'info');
-    
-    fetch(`/api/volume/${volumeId}/xml`, {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            updateStatus(`Complete! Metadata processed and XML prepared for comic injection for volume ${volumeId}`, 'success');
-            showNotification('Success', 'Metadata and XML preparation completed! Now injecting metadata into comic files...');
-            
-            // Automatically proceed to metadata injection
-            setTimeout(() => {
-                injectMetadataIntoComics(volumeId);
-            }, 1000);
-        } else {
-            updateStatus(`Error preparing XML: ${data.error}`, 'error');
-            showNotification('Error', data.error);
-        }
-    })
-    .catch(error => {
-        updateStatus(`Error preparing XML: ${error.message}`, 'error');
-        showNotification('Error', error.message);
-    });
-}
+// This function is no longer needed - the new workflow handles everything in one step
+// function generateXMLAfterMetadata(volumeId) {
+//     // Removed - new workflow processes everything in one step
+// }
 
-function injectMetadataIntoComics(volumeId) {
-    if (!volumeId) {
-        updateStatus('Error: Could not determine volume ID', 'error');
-        showNotification('Error', 'Could not determine volume ID');
-        return;
-    }
-    
-    updateStatus(`Starting metadata injection into comic files for volume ${volumeId}...`, 'info');
-    showNotification('Info', 'Starting metadata injection...');
-    
-    fetch(`/api/volume/${volumeId}/inject`, {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            updateStatus(`Complete! Metadata injected into comic files for volume ${volumeId}`, 'success');
-            showNotification('Success', data.message);
-            
-            // Show detailed results
-            let resultsMessage = `Injected metadata into ${data.results.length} comic files:\n`;
-            data.results.forEach(result => {
-                const status = result.success ? '✅' : '❌';
-                resultsMessage += `${status} ${result.file}: ${result.success ? result.message : result.error}\n`;
-            });
-            
-            // Show results in a more detailed way
-            showNotification('Results', resultsMessage);
-            
-            // Show final completion message
-            setTimeout(() => {
-                showNotification('Workflow Complete!', 'The entire metadata workflow has been completed successfully!');
-                
-                // Reload the page to show updated button states
-                setTimeout(() => {
-                    location.reload();
-                }, 2000);
-            }, 2000);
-        } else {
-            updateStatus(`Error injecting metadata: ${data.error}`, 'error');
-            showNotification('Error', data.error);
-        }
-    })
-    .catch(error => {
-        updateStatus(`Error injecting metadata: ${error.message}`, 'error');
-        showNotification('Error', error.message);
-    });
-}
+// This function is no longer needed - the new workflow handles everything in one step
+// function injectMetadataIntoComics(volumeId) {
+//     // Removed - new workflow processes everything in one step
+// }
 
 /**
  * Utility Functions
  */
+function stripParentDirectory(path) {
+    if (!path) return path;
+    const parts = path.split('/');
+    // Remove the first directory (parent) and join the rest
+    return parts.slice(1).join('/');
+}
+
 function getVolumeIdFromPage() {
     // Try to get volume ID from the URL path
     const pathParts = window.location.pathname.split('/');
@@ -534,13 +814,27 @@ function displayCacheInfo(cacheInfo) {
 function formatTimeDifference(timeDiff) {
     if (!timeDiff) return 'Unknown';
     
-    const hours = Math.floor(timeDiff.total_seconds() / 3600);
-    const minutes = Math.floor((timeDiff.total_seconds() % 3600) / 60);
-    
-    if (hours > 0) {
-        return `${hours}h ${minutes}m ago`;
+    // Handle both old format (timedelta object) and new format (object with components)
+    if (typeof timeDiff === 'object' && timeDiff.total_seconds !== undefined) {
+        const hours = Math.floor(timeDiff.total_seconds / 3600);
+        const minutes = Math.floor((timeDiff.total_seconds % 3600) / 60);
+        
+        if (hours > 0) {
+            return `${hours}h ${minutes}m ago`;
+        } else {
+            return `${minutes}m ago`;
+        }
+    } else if (typeof timeDiff === 'object' && timeDiff.days !== undefined) {
+        // New format with individual components
+        if (timeDiff.days > 0) {
+            return `${timeDiff.days}d ${timeDiff.hours}h ${timeDiff.minutes}m ago`;
+        } else if (timeDiff.hours > 0) {
+            return `${timeDiff.hours}h ${timeDiff.minutes}m ago`;
+        } else {
+            return `${timeDiff.minutes}m ago`;
+        }
     } else {
-        return `${minutes}m ago`;
+        return 'Unknown';
     }
 }
 
@@ -554,7 +848,7 @@ function refreshCache() {
             if (data.success) {
                 showNotification('Success', data.message);
                 // Reload volumes to show updated data
-                loadVolumes();
+                refreshAndLoadVolumes();
             } else {
                 showNotification('Error', 'Failed to refresh cache: ' + data.error);
             }
@@ -643,7 +937,7 @@ function checkForNewVolumes() {
                 showNotification('New Volumes Found!', data.message);
                 
                 // Reload volumes to show the new ones
-                loadVolumes();
+                refreshAndLoadVolumes();
                 
                 // Update cache info to show new stats
                 getCacheInfo();
@@ -683,6 +977,26 @@ function setupEventListeners() {
     if (sortOrder) {
         sortOrder.addEventListener('change', applyFiltersAndDisplay);
     }
+    
+    // Add keyboard shortcuts
+    document.addEventListener('keydown', function(event) {
+        // Ctrl+A for select all
+        if (event.ctrlKey && event.key === 'a') {
+            event.preventDefault();
+            if (filteredVolumes.length > 0) {
+                selectAllVolumes();
+                showNotification('Info', 'All volumes selected (Ctrl+A)');
+            }
+        }
+        
+        // Escape to deselect all
+        if (event.key === 'Escape') {
+            if (selectedVolumes.size > 0) {
+                deselectAllVolumes();
+                showNotification('Info', 'All selections cleared (Esc)');
+            }
+        }
+    });
 }
 
 /**
@@ -691,11 +1005,26 @@ function setupEventListeners() {
 function initializePage() {
     setupEventListeners();
     
-    // Auto-load volumes on main page
-    if (document.getElementById('volumesContainer')) {
+    // Auto-load volumes on main page only if configured
+    if (document.getElementById('volumesContainer') && window.IS_CONFIGURED) {
         setTimeout(() => {
             loadVolumes();
         }, 500);
+    } else if (document.getElementById('volumesContainer') && !window.IS_CONFIGURED) {
+        // Show message for unconfigured state
+        const volumesContainer = document.getElementById('volumesContainer');
+        if (volumesContainer) {
+            volumesContainer.innerHTML = `
+                <div class="text-center py-4">
+                    <i class="fas fa-cog fa-3x text-muted mb-3"></i>
+                    <h5 class="text-muted">Configuration Required</h5>
+                    <p class="text-muted">Please configure your API keys in the Settings page to start using the app.</p>
+                    <a href="/settings" class="btn btn-primary">
+                        <i class="fas fa-cog me-1"></i>Go to Settings
+                    </a>
+                </div>
+            `;
+        }
     }
 }
 

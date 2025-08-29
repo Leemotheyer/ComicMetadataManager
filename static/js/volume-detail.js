@@ -209,11 +209,13 @@ function pollTaskStatusAndGenerateXML(taskId) {
         .then(data => {
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
-                updateStatus('Metadata processing completed, now preparing XML for comic injection...', 'success');
-                showNotification('Success', 'Metadata completed, preparing XML for comic injection...');
+                updateStatus('Metadata processing and injection completed successfully!', 'success');
+                showNotification('Success', data.message);
                 
-                // Step 2: Generate XML files - use the consolidated function from app.js
-                generateXMLAfterMetadata();
+                // Reload the page to show updated data
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
             } else if (data.status === 'error') {
                 clearInterval(pollInterval);
                 updateStatus(`Error: ${data.error}`, 'error');
@@ -254,112 +256,20 @@ function pollTaskStatus(taskId) {
     }, 2000);
 }
 
-function generateXMLAfterMetadata() {
-    updateStatus('Preparing XML metadata for comic injection...', 'info');
-    
-    const volumeId = getVolumeIdFromPage();
-    
-    fetch(`/api/volume/${volumeId}/xml`, {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            updateStatus(`Complete! Metadata processed and XML prepared for comic injection`, 'success');
-            showNotification('Success', 'Metadata and XML preparation completed! Now injecting metadata into comic files...');
-            
-            // Automatically proceed to metadata injection
-            setTimeout(() => {
-                injectMetadataIntoComics();
-            }, 1000);
-        } else {
-            updateStatus(`Error preparing XML: ${data.error}`, 'error');
-            showNotification('Error', data.error);
-        }
-    })
-    .catch(error => {
-        updateStatus(`Error preparing XML: ${error.message}`, 'error');
-        showNotification('Error', error.message);
-    });
-}
+// This function is no longer needed - the new workflow handles everything in one step
+// function generateXMLAfterMetadata() {
+//     // Removed - new workflow processes everything in one step
+// }
 
-function injectMetadataIntoComics() {
-    const volumeId = getVolumeIdFromPage();
-    
-    if (!volumeId) {
-        updateStatus('Error: Could not determine volume ID', 'error');
-        showNotification('Error', 'Could not determine volume ID');
-        return;
-    }
-    
-    updateStatus(`Starting metadata injection into comic files for volume ${volumeId}...`, 'info');
-    showNotification('Info', 'Starting metadata injection...');
-    
-    fetch(`/api/volume/${volumeId}/inject`, {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            updateStatus(`Complete! Metadata injected into comic files for volume ${volumeId}`, 'success');
-            showNotification('Success', data.message);
-            
-            // Show detailed results
-            let resultsMessage = `Injected metadata into ${data.results.length} comic files:\n`;
-            data.results.forEach(result => {
-                const status = result.success ? '✅' : '❌';
-                resultsMessage += `${status} ${result.file}: ${result.success ? result.message : result.error}\n`;
-            });
-            
-            // Show results in a more detailed way
-            showNotification('Results', resultsMessage);
-            
-            // Show final completion message
-            setTimeout(() => {
-                showNotification('Workflow Complete!', 'The entire metadata workflow has been completed successfully!');
-                
-                // Reload the page to show updated status
-                setTimeout(() => {
-                    location.reload();
-                }, 2000);
-            }, 2000);
-        } else {
-            updateStatus(`Error injecting metadata: ${data.error}`, 'error');
-            showNotification('Error', data.error);
-        }
-    })
-    .catch(error => {
-        updateStatus(`Error injecting metadata: ${error.message}`, 'error');
-        showNotification('Error', error.message);
-    });
-}
+// This function is no longer needed - the new workflow handles everything in one step
+// function injectMetadataIntoComics() {
+//     // Removed - new workflow processes everything in one step
+// }
 
-function generateXML() {
-    updateStatus('Preparing XML metadata for comic injection...', 'info');
-    
-    const volumeId = getVolumeIdFromPage();
-    
-    fetch(`/api/volume/${volumeId}/xml`, {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            updateStatus(`XML preparation completed successfully`, 'success');
-            showNotification('Success', data.message);
-            
-            // Show success message without download prompt
-            showNotification('Ready', 'XML metadata is now ready to be injected into comic files. Use the comic injection feature when available.');
-        } else {
-            updateStatus(`Error: ${data.error}`, 'error');
-            showNotification('Error', data.error);
-        }
-    })
-    .catch(error => {
-        updateStatus(`Error preparing XML: ${error.message}`, 'error');
-        showNotification('Error', error.message);
-    });
-}
+// This function is no longer needed - the new workflow handles everything in one step
+// function generateXML() {
+//     // Removed - new workflow processes everything in one step
+// }
 
 function refreshVolume() {
     updateStatus('Refreshing volume data...', 'info');
@@ -392,6 +302,39 @@ function cleanupTempDirectories() {
     })
     .catch(error => {
         updateStatus(`Cleanup error: ${error.message}`, 'error');
+        showNotification('Error', error.message);
+    });
+}
+
+function cleanupTempDirectoriesAggressive() {
+    if (!confirm('This will clean up ALL temporary directories immediately. Continue?')) {
+        return;
+    }
+    
+    updateStatus('Cleaning up ALL temporary directories...', 'info');
+    
+    fetch('/api/cleanup/temp/aggressive', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateStatus(`Aggressive cleanup completed: ${data.cleaned_count} cleaned, ${data.failed_count} failed`, 'success');
+            showNotification('Success', `Cleaned ${data.cleaned_count} directories, ${data.failed_count} failed`);
+            
+            if (data.total_found > 0) {
+                let detailsMessage = `Found ${data.total_found} temporary directories:\n`;
+                detailsMessage += `• Cleaned: ${data.cleaned_count}\n`;
+                detailsMessage += `• Failed: ${data.failed_count}`;
+                showNotification('Cleanup Details', detailsMessage);
+            }
+        } else {
+            updateStatus(`Aggressive cleanup failed: ${data.error}`, 'error');
+            showNotification('Error', data.error);
+        }
+    })
+    .catch(error => {
+        updateStatus(`Aggressive cleanup error: ${error.message}`, 'error');
         showNotification('Error', error.message);
     });
 }
@@ -429,7 +372,16 @@ function getVolumeIdFromPage() {
  * Page Initialization for Volume Detail
  */
 function initializeVolumeDetailPage() {
-    // Set up any volume detail specific event listeners here
+    // Set up event delegation for issue processing buttons
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('process-issue-btn')) {
+            const volumeId = e.target.getAttribute('data-volume-id');
+            const issueIndex = e.target.getAttribute('data-issue-index');
+            const issueNumber = e.target.getAttribute('data-issue-number');
+            processIssueMetadata(volumeId, issueIndex, issueNumber);
+        }
+    });
+    
     console.log('Volume detail page initialized');
 }
 

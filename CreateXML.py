@@ -98,10 +98,6 @@ class ComicInfoXMLGenerator:
             series_elem = ET.SubElement(root, 'Series')
             series_elem.text = comicvine_metadata['volume']['name']
         
-        if comicvine_metadata.get('volume', {}).get('id'):
-            volume_elem = ET.SubElement(root, 'Volume')
-            volume_elem.text = str(comicvine_metadata['volume']['id'])
-        
         # Description
         if comicvine_metadata.get('description'):
             summary_elem = ET.SubElement(root, 'Summary')
@@ -195,11 +191,6 @@ class ComicInfoXMLGenerator:
             web_elem = ET.SubElement(root, 'Web')
             web_elem.text = comicvine_metadata['site_detail_url']
         
-        # ComicVine ID for reference (custom field, but useful)
-        if comicvine_metadata.get('id'):
-            comicvine_id_elem = ET.SubElement(root, 'ComicVineID')
-            comicvine_id_elem.text = str(comicvine_metadata['id'])
-        
         # Format the XML with proper indentation
         rough_string = ET.tostring(root, 'unicode')
         reparsed = minidom.parseString(rough_string)
@@ -284,22 +275,6 @@ class ComicInfoXMLGenerator:
             
             volume_elem = ET.SubElement(root, 'Volume')
             volume_elem.text = metadata['volume']['name']
-            
-            alternate_series_elem = ET.SubElement(root, 'AlternateSeries')
-            alternate_series_elem.text = metadata['volume']['name']
-        
-        # Issue count
-        if volume_details.get('issue_count'):
-            count_elem = ET.SubElement(root, 'Count')
-            count_elem.text = str(volume_details['issue_count'])
-            
-            alternate_count_elem = ET.SubElement(root, 'AlternateCount')
-            alternate_count_elem.text = str(volume_details['issue_count'])
-        
-        # Alternate number
-        if target_issue.get('issue_number'):
-            alternate_number_elem = ET.SubElement(root, 'AlternateNumber')
-            alternate_number_elem.text = str(target_issue['issue_number'])
         
         # Description
         if metadata.get('description'):
@@ -428,10 +403,6 @@ class ComicInfoXMLGenerator:
         # Black and white
         black_white_elem = ET.SubElement(root, 'BlackAndWhite')
         black_white_elem.text = 'No'
-        
-        # Scan information
-        scan_info_elem = ET.SubElement(root, 'ScanInformation')
-        scan_info_elem.text = 'Comic Metadata Manager'
         
         # Format the XML with proper indentation
         rough_string = ET.tostring(root, 'unicode')
