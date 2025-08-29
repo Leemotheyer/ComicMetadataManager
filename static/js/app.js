@@ -814,13 +814,27 @@ function displayCacheInfo(cacheInfo) {
 function formatTimeDifference(timeDiff) {
     if (!timeDiff) return 'Unknown';
     
-    const hours = Math.floor(timeDiff.total_seconds() / 3600);
-    const minutes = Math.floor((timeDiff.total_seconds() % 3600) / 60);
-    
-    if (hours > 0) {
-        return `${hours}h ${minutes}m ago`;
+    // Handle both old format (timedelta object) and new format (object with components)
+    if (typeof timeDiff === 'object' && timeDiff.total_seconds !== undefined) {
+        const hours = Math.floor(timeDiff.total_seconds / 3600);
+        const minutes = Math.floor((timeDiff.total_seconds % 3600) / 60);
+        
+        if (hours > 0) {
+            return `${hours}h ${minutes}m ago`;
+        } else {
+            return `${minutes}m ago`;
+        }
+    } else if (typeof timeDiff === 'object' && timeDiff.days !== undefined) {
+        // New format with individual components
+        if (timeDiff.days > 0) {
+            return `${timeDiff.days}d ${timeDiff.hours}h ${timeDiff.minutes}m ago`;
+        } else if (timeDiff.hours > 0) {
+            return `${timeDiff.hours}h ${timeDiff.minutes}m ago`;
+        } else {
+            return `${timeDiff.minutes}m ago`;
+        }
     } else {
-        return `${minutes}m ago`;
+        return 'Unknown';
     }
 }
 

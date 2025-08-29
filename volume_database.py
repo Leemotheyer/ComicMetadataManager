@@ -496,6 +496,14 @@ class VolumeDatabase:
                 if row:
                     last_updated = datetime.fromisoformat(row[0])
                     cache_age = datetime.now() - last_updated
+                    # Convert timedelta to a serializable format
+                    cache_age = {
+                        'total_seconds': cache_age.total_seconds(),
+                        'days': cache_age.days,
+                        'hours': cache_age.seconds // 3600,
+                        'minutes': (cache_age.seconds % 3600) // 60,
+                        'seconds': cache_age.seconds % 60
+                    }
                 
                 # Get processing statistics
                 cursor.execute('''
