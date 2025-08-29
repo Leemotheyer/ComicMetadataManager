@@ -73,15 +73,19 @@ body {
 /* Multi-Select Checkboxes */
 .volume-card .form-check {
     z-index: 10;
+    pointer-events: auto;
 }
 
 .volume-card .form-check-input {
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: rgba(0, 0, 0, 0.8);
     border-color: var(--primary-yellow);
     width: 1.2em;
     height: 1.2em;
     cursor: pointer;
     transition: all 0.2s ease;
+    pointer-events: auto;
+    position: relative;
+    z-index: 15;
 }
 
 .volume-card .form-check-input:checked {
@@ -95,6 +99,11 @@ body {
 
 .volume-card .form-check-input:hover {
     transform: scale(1.1);
+    background-color: rgba(0, 0, 0, 0.9);
+}
+
+.volume-card .form-check-input:checked:hover {
+    background-color: #e6c200;
 }
 
 /* Batch Operations Panel */
@@ -278,6 +287,11 @@ body {
     position: relative;
     flex-shrink: 0;
     border-radius: 4px;
+    pointer-events: none;
+}
+
+.cover-image-container .form-check {
+    pointer-events: auto;
 }
 
 .cover-image-container-large {

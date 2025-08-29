@@ -98,10 +98,6 @@ class ComicInfoXMLGenerator:
             series_elem = ET.SubElement(root, 'Series')
             series_elem.text = comicvine_metadata['volume']['name']
         
-        if comicvine_metadata.get('volume', {}).get('id'):
-            volume_elem = ET.SubElement(root, 'Volume')
-            volume_elem.text = str(comicvine_metadata['volume']['id'])
-        
         # Description
         if comicvine_metadata.get('description'):
             summary_elem = ET.SubElement(root, 'Summary')

@@ -25,7 +25,8 @@ from utils import (
 )
 
 # Import logging service
-from app.services.logging_service import logging_service
+from app.services.logging_service import LoggingService
+logging_service = LoggingService()
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = settings_manager.get_setting('flask_secret_key')
@@ -280,7 +281,7 @@ class VolumeManager:
                     volume_db.update_volume_status(volume_id, metadata_processed=True)
                     return {}
             
-            # Now process metadata for issues that need it
+            # Now process metadata for issues that need it - ONE ISSUE AT A TIME
             if manual_override:
                 logging_service.info(f"🔄 Manual override: processing metadata for {len(issues_needing_metadata)} issues in volume {volume_id}", "volume")
                 if already_processed_count > 0:
@@ -293,50 +294,50 @@ class VolumeManager:
             injector = ComicMetadataInjector()
             
             metadata_results = {}
+            processed_count = 0
+            
+            # Process each issue individually - this is the key change
             for issue in issues_needing_metadata:
                 comicvine_id = issue.get('comicvine_id')
                 issue_number = issue.get('issue_number', 'Unknown')
                 
-                logging_service.info(f"Processing issue {issue_number} (ComicVine ID: {comicvine_id})", "volume")
+                logging_service.info(f"🔄 Processing issue {issue_number} (ComicVine ID: {comicvine_id}) - {processed_count + 1}/{len(issues_needing_metadata)}", "volume")
                 
-                # Get ComicVine metadata directly
-                metadata = self.metadata_fetcher.get_comicvine_metadata(comicvine_id)
-                if metadata:
-                    # Find the issue index in the volume details
-                    issue_index = None
-                    for i, vol_issue in enumerate(volume_details['issues']):
-                        if vol_issue.get('comicvine_id') == comicvine_id:
-                            issue_index = i
-                            break
-                    
-                    if issue_index is not None:
-                        # Process and inject metadata for this specific issue
-                        result = injector.process_issue_metadata(
-                            volume_id, 
-                            issue_index, 
-                            volume_details, 
-                            self.metadata_fetcher, 
-                            volume_db
-                        )
-                        
-                        if result['success']:
-                            metadata_results[comicvine_id] = {
-                                'kapowarr_issue': issue,
-                                'comicvine_metadata': metadata,
-                                'injection_result': result
-                            }
-                            logging_service.info(f"✅ Successfully processed and injected metadata for issue {issue_number}", "volume")
-                        else:
-                            logging_service.error(f"❌ Failed to inject metadata for issue {issue_number}: {result.get('error', 'Unknown error')}", "volume")
-                    else:
-                        logging_service.error(f"❌ Could not find issue index for issue {issue_number}", "volume")
+                # Find the issue index in the volume details
+                issue_index = None
+                for i, vol_issue in enumerate(volume_details['issues']):
+                    if vol_issue.get('comicvine_id') == comicvine_id:
+                        issue_index = i
+                        break
+                
+                if issue_index is None:
+                    logging_service.error(f"❌ Could not find issue index for issue {issue_number}", "volume")
+                    continue
+                
+                # Process and inject metadata for this specific issue individually
+                result = injector.process_issue_metadata(
+                    volume_id, 
+                    issue_index, 
+                    volume_details, 
+                    self.metadata_fetcher, 
+                    volume_db
+                )
+                
+                if result['success']:
+                    metadata_results[comicvine_id] = {
+                        'kapowarr_issue': issue,
+                        'comicvine_metadata': result['result']['comicvine_metadata'],
+                        'injection_result': result
+                    }
+                    processed_count += 1
+                    logging_service.info(f"✅ Successfully processed and injected metadata for issue {issue_number} ({processed_count}/{len(issues_needing_metadata)})", "volume")
                 else:
-                    logging_service.error(f"❌ Failed to get metadata for issue {issue_number}", "volume")
+                    logging_service.error(f"❌ Failed to process issue {issue_number}: {result.get('error', 'Unknown error')}", "volume")
                 
                 # Rate limiting for ComicVine API
                 time.sleep(1.0)
             
-            logging_service.info(f"Successfully processed metadata for {len(metadata_results)} issues", "volume")
+            logging_service.info(f"✅ Successfully processed metadata for {processed_count}/{len(issues_needing_metadata)} issues", "volume")
             
             # Check if all issues in the volume now have metadata
             all_issues_processed = True
@@ -353,10 +354,23 @@ class VolumeManager:
                 volume_db.update_volume_status(volume_id, metadata_processed=True)
                 logging_service.info(f"✅ All issues in volume {volume_id} now have metadata processed", "volume")
             
+            # Clean up any orphaned temporary directories for this volume
+            try:
+                injector._cleanup_orphaned_temp_dirs(volume_id)
+                logging_service.info(f"🧹 Cleaned up temporary directories for volume {volume_id}", "volume")
+            except Exception as cleanup_error:
+                logging_service.warning(f"Warning: Failed to clean up temporary directories for volume {volume_id}: {cleanup_error}", "volume")
+            
             return metadata_results
             
         except Exception as e:
             logging_service.error(f"Error processing volume metadata: {e}", "volume")
+            # Clean up temporary directories even on error
+            try:
+                injector._cleanup_orphaned_temp_dirs(volume_id)
+                logging_service.info(f"🧹 Cleaned up temporary directories for volume {volume_id} after error", "volume")
+            except Exception as cleanup_error:
+                logging_service.warning(f"Warning: Failed to clean up temporary directories for volume {volume_id}: {cleanup_error}", "volume")
             return {}
     
 
@@ -496,7 +510,7 @@ def batch_process_volume_metadata():
                 
                 for volume_id in volume_ids:
                     try:
-                        # Process each volume
+                        # Process each volume individually (which now processes each issue individually)
                         metadata = volume_manager.process_volume_metadata(volume_id, manual_override=True)
                         
                         # Get total issues from volume details for comparison
@@ -509,7 +523,7 @@ def batch_process_volume_metadata():
                             'success': True,
                             'issues_processed': issues_with_files,
                             'issues_skipped': total_issues - issues_with_files,
-                            'message': f'Successfully processed {issues_with_files} issues with files'
+                            'message': f'Successfully processed {issues_with_files} issues with files (each issue processed individually)'
                         })
                         total_processed += 1
                         
@@ -588,11 +602,24 @@ def process_issue_metadata(volume_id, issue_index):
                         'error': result['error']
                     }
                 
+                # Clean up any orphaned temporary directories for this volume
+                try:
+                    injector._cleanup_orphaned_temp_dirs(volume_id)
+                    logging_service.info(f"🧹 Cleaned up temporary directories for volume {volume_id} after issue processing", "volume")
+                except Exception as cleanup_error:
+                    logging_service.warning(f"Warning: Failed to clean up temporary directories for volume {volume_id}: {cleanup_error}", "volume")
+                
             except Exception as e:
                 task_results[task_id] = {
                     'status': 'error',
                     'error': str(e)
                 }
+                # Clean up temporary directories even on error
+                try:
+                    injector._cleanup_orphaned_temp_dirs(volume_id)
+                    logging_service.info(f"🧹 Cleaned up temporary directories for volume {volume_id} after error", "volume")
+                except Exception as cleanup_error:
+                    logging_service.warning(f"Warning: Failed to clean up temporary directories for volume {volume_id}: {cleanup_error}", "volume")
         
         # Start task in background
         thread = threading.Thread(target=issue_metadata_task)
@@ -617,103 +644,30 @@ def get_task_status(task_id):
 
 @app.route('/api/volume/<int:volume_id>/xml', methods=['POST'])
 def prepare_xml_for_injection(volume_id):
-    """Prepare XML metadata for comic file injection"""
+    """Prepare XML metadata for comic file injection (DEPRECATED - Use process metadata instead)"""
     try:
-        # Get metadata first - manual button press should always work
-        metadata = volume_manager.process_volume_metadata(volume_id, manual_override=True)
-        if not metadata:
-            return jsonify({'success': False, 'error': 'No metadata available for this volume'})
-        
-        # Generate XML files
-        temp_dir = f"temp_xml_{volume_id}_{int(time.time())}"
-        xml_dir = generate_xml_files(metadata, temp_dir)
-        
-        if xml_dir and os.path.exists(xml_dir):
-            # Count XML files generated
-            xml_files = [f for f in os.listdir(xml_dir) if f.endswith('.xml')]
-            xml_count = len(xml_files)
-            
-            if xml_count > 0:
-                # Update database status
-                volume_db.update_volume_status(volume_id, xml_generated=True)
-                
-                return jsonify({
-                    'success': True,
-                    'message': f'Successfully generated {xml_count} XML files',
-                    'xml_count': xml_count,
-                    'output_directory': xml_dir,
-                    'xml_files': xml_files
-                })
-            else:
-                return jsonify({
-                    'success': False,
-                    'message': 'No XML files were generated'
-                })
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Failed to generate XML files'
-            })
+        # This endpoint is deprecated - the new workflow processes each issue individually
+        # which includes fetching metadata, creating XML, and injecting it all in one step
+        return jsonify({
+            'success': False, 
+            'error': 'This endpoint is deprecated. Use the "Process Metadata" button instead, which now processes each issue individually and injects metadata automatically.',
+            'recommendation': 'Use the "Process Metadata" button which handles the complete workflow for each issue individually'
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 
 @app.route('/api/volume/<int:volume_id>/inject', methods=['POST'])
 def inject_metadata_into_comics(volume_id):
-    """Inject metadata into comic files for a specific volume"""
+    """Inject metadata into comic files for a specific volume (DEPRECATED - Use process metadata instead)"""
     try:
-        # Get volume details to get the folder path
-        volume_details = volume_manager.get_volume_details(volume_id)
-        if not volume_details:
-            return jsonify({'success': False, 'error': 'Volume details not found'})
-        
-        # Get the folder path from volume details
-        kapowarr_folder_path = volume_details.get('folder')
-        if not kapowarr_folder_path:
-            return jsonify({'success': False, 'error': 'No folder path found for this volume'})
-        
-        # Check if XML files exist
-        xml_dir = f"temp_xml_{volume_id}_{int(time.time())}"
-        if not os.path.exists(xml_dir):
-            # Try to find existing XML directory
-            existing_dirs = [d for d in os.listdir('.') if d.startswith(f'temp_xml_{volume_id}_')]
-            if existing_dirs:
-                xml_dir = existing_dirs[0]
-            else:
-                return jsonify({'success': False, 'error': 'No XML files found for this volume. Generate XML first.'})
-        
-        # Get list of XML files
-        xml_files = []
-        for item in os.listdir(xml_dir):
-            if item.endswith('.xml'):
-                xml_files.append(os.path.join(xml_dir, item))
-        
-        if not xml_files:
-            return jsonify({'success': False, 'error': 'No XML files found in the output directory'})
-        
-        # Import and use the metadata injector
-        from MetaDataAdd import ComicMetadataInjector
-        
-        injector = ComicMetadataInjector()
-        result = injector.inject_metadata(volume_id, xml_files, kapowarr_folder_path)
-        
-        if result['success']:
-            # Update database status
-            volume_db.update_volume_status(volume_id, metadata_injected=True)
-            
-            return jsonify({
-                'success': True,
-                'message': result['message'],
-                'results': result['results'],
-                'local_folder': result['local_folder'],
-                'kapowarr_folder': result['kapowarr_folder']
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': result['error']
-            })
-            
+        # This endpoint is deprecated - the new workflow processes each issue individually
+        # which includes fetching metadata, creating XML, and injecting it all in one step
+        return jsonify({
+            'success': False, 
+            'error': 'This endpoint is deprecated. Use the "Process Metadata" button instead, which now processes each issue individually and injects metadata automatically.',
+            'recommendation': 'Use the "Process Metadata" button which handles the complete workflow for each issue individually'
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -811,6 +765,9 @@ def clear_cache():
 def refresh_cache():
     """Force refresh of the volume cache"""
     try:
+        # Clear volume details cache to ensure fresh data
+        volume_db.clear_volume_details_cache()
+        
         # Force refresh by getting volumes with force_refresh=True
         volumes = volume_manager.get_volume_list(force_refresh=True)
         return jsonify({
@@ -898,6 +855,17 @@ def cleanup_temp_directories():
     """Clean up any orphaned temporary directories"""
     try:
         result = cleanup_temp_directories()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/cleanup/temp/aggressive', methods=['POST'])
+def cleanup_temp_directories_aggressive():
+    """Clean up ALL temporary directories immediately (use with caution)"""
+    try:
+        from MetaDataAdd import ComicMetadataInjector
+        injector = ComicMetadataInjector()
+        result = injector.cleanup_all_temp_dirs()
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
