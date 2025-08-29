@@ -68,6 +68,12 @@ class LoggingService:
                 self.original_stream = original_stream
                 self.log_service = log_service
                 self.level = level
+                # Add encoding attribute that some libraries expect
+                self.encoding = getattr(original_stream, 'encoding', 'utf-8')
+                # Add other common attributes that file-like objects might expect
+                self.mode = getattr(original_stream, 'mode', 'w')
+                self.name = getattr(original_stream, 'name', '<stdout>' if original_stream == sys.stdout else '<stderr>')
+                self.closed = getattr(original_stream, 'closed', False)
             
             def write(self, text):
                 if text.strip():  # Only log non-empty lines
@@ -76,6 +82,14 @@ class LoggingService:
             
             def flush(self):
                 self.original_stream.flush()
+            
+            def close(self):
+                # Don't actually close the original stream, just flush it
+                self.original_stream.flush()
+            
+            def __getattr__(self, name):
+                # Delegate any other attributes to the original stream
+                return getattr(self.original_stream, name)
         
         # Capture stdout and stderr
         sys.stdout = LoggedStream(sys.stdout, self, 'INFO')
